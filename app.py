@@ -36,12 +36,14 @@ if uploaded_file:
         st.header("Parámetros de Optimización")
         col1, col2 = st.columns(2)
 	
-        with col1:
-            tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
+	with col1:
+	    tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
 	    st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
-        with col2:
-            liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100000.0)
+	
+	with col2:
+	    liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100000.0)
 	    st.caption(PARAM_DESCRIPTION["liquidez_minima"])
+
 
         # Rango de tasas posibles
         activos = df[df['Tipo'] == 'Activo']
