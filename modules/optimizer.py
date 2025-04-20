@@ -117,3 +117,8 @@ def simular_escenario(df, cambio_tasa):
             df_simulado[col] = np.nan
 
     return df_simulado
+
+PARAM_DESCRIPTION = {
+    "tasa_objetivo": "Tasa objetivo promedio que se desea alcanzar en el portafolio de activos. Esta tasa orienta la optimización para acercarse al rendimiento deseado, manteniendo el balance entre rentabilidad y riesgo.",
+    "liquidez_minima": "Monto mínimo de efectivo que el usuario desea mantener como reserva líquida. Ayuda a asegurar que el portafolio tenga suficiente liquidez disponible para cubrir necesidades inmediatas."
+}
