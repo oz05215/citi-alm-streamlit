@@ -17,7 +17,7 @@ uploaded_file = st.sidebar.file_uploader("Selecciona un archivo CSV", type="csv"
 
 if uploaded_file:
     #df = pd.read_csv(uploaded_file)
-    df = pd.read_csv(uploaded_file, encoding='utf-8', errors='replace')
+    df = pd.read_csv(uploaded_file, encoding='utf-8')
 
     st.success("Archivo cargado correctamente ✅")
 
