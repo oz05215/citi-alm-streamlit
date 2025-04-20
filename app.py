@@ -16,7 +16,9 @@ st.sidebar.header("📂 Cargar archivo de entrada")
 uploaded_file = st.sidebar.file_uploader("Selecciona un archivo CSV", type="csv")
 
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    #df = pd.read_csv(uploaded_file)
+    df = pd.read_csv(uploaded_file, encoding='utf-8', errors='replace')
+
     st.success("Archivo cargado correctamente ✅")
 
     # Crear pestañas
