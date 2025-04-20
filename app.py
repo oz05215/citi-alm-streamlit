@@ -17,12 +17,9 @@ st.sidebar.header("📂 Cargar archivo de entrada")
 uploaded_file = st.sidebar.file_uploader("Selecciona un archivo CSV", type="csv")
 
 if uploaded_file:
-    #df = pd.read_csv(uploaded_file)
     df = pd.read_csv(uploaded_file, encoding='utf-8')
-
     st.success("Archivo cargado correctamente ✅")
 
-    # Crear pestañas
     opt_tab, sim_tab, sens_tab = st.tabs([
         "🔧 Optimización de Portafolio",
         "📈 Simulación de Tasas",
@@ -35,15 +32,14 @@ if uploaded_file:
     with opt_tab:
         st.header("Parámetros de Optimización")
         col1, col2 = st.columns(2)
+
         with col1:
             tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
             st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
         with col2:
-            liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100000.0)
+            liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100.0)
             st.caption(PARAM_DESCRIPTION["liquidez_minima"])
 
-
-        # Rango de tasas posibles
         activos = df[df['Tipo'] == 'Activo']
         tasa_min = activos['Tasa (%)'].min()
         tasa_max = activos['Tasa (%)'].max()
@@ -59,35 +55,78 @@ if uploaded_file:
                     st.error(resumen["error"])
                 else:
                     st.success("✅ Optimización exitosa")
+
                     st.subheader("Resumen de Optimización")
-                    st.json(resumen)
+                    df_resumen = pd.DataFrame(list(resumen.items()), columns=["Indicador", "Valor"])
+                    st.dataframe(df_resumen)
 
                     st.subheader("Asignación Óptima")
                     st.dataframe(resultado)
 
-                    # Gráfico Top 5 con % y montos
-                    st.subheader("Visualización de la Asignación Óptima")
+                    st.markdown("""
+📘 **Descripción de las Categorías del Portafolio:**
+
+- **Préstamos (Activo):** Son colocaciones de crédito que realiza el banco a clientes individuales o corporativos. Representan una de las principales fuentes de ingreso financiero, ya que generan intereses. Desde la perspectiva del banco, es un **activo generador de rentabilidad**, aunque con riesgo crediticio.
+
+- **Inversiones (Activo):** Comprende instrumentos financieros como bonos, títulos públicos o privados que el banco mantiene para obtener rendimiento. Son activos utilizados para diversificar ingresos y gestionar excedentes de liquidez.
+
+- **Efectivo (Activo):** Representa el dinero disponible en caja o en cuentas a la vista en el banco central. Es el activo más líquido, fundamental para cubrir necesidades inmediatas y cumplir con requerimientos regulatorios de reservas mínimas.
+
+- **Depósitos (Pasivo):** Fondos que los clientes colocan en el banco, ya sea en cuentas corrientes, de ahorro o a plazo. Para el banco son un **pasivo**, ya que debe devolverlos en el futuro. Sin embargo, constituyen su principal fuente de fondeo.
+
+- **Deuda (Pasivo):** Obligaciones que el banco asume mediante la emisión de bonos u otros instrumentos de financiamiento. Es un pasivo que permite captar capital en los mercados para financiar actividades del banco, aunque a un costo mayor que los depósitos.
+
+✳️ *Estas categorías son clave para la gestión de activos y pasivos (ALM), reflejando cómo el banco obtiene y utiliza recursos para generar valor financiero de forma equilibrada y sostenible.*
+""")
+
+                    # Visualización: Duración
+                    st.subheader("📊 Comparación de Duración Activos vs Pasivos")
+                    fig_dur, ax_dur = plt.subplots(figsize=(6, 3))
+                    ax_dur.bar(["Duración Activos", "Duración Pasivos"], [
+                        resumen['Duración Promedio Activos (años)'],
+                        resumen['Duración Promedio Pasivos (años)']
+                    ])
+                    ax_dur.set_ylabel("Años")
+                    ax_dur.set_title("Duración Promedio")
+                    st.pyplot(fig_dur)
+                    st.markdown("📌 **Interpretación:** Esta gráfica compara la duración promedio ponderada entre activos y pasivos. "
+                                "Un desajuste muy alto puede indicar sensibilidad al riesgo de tasa de interés. Idealmente, las barras deberían estar lo más alineadas posible.")
+
+                    # Visualización: VaR
+                    st.subheader("📉 Valor en Riesgo (VaR 95%)")
+                    fig_var, ax_var = plt.subplots(figsize=(6, 3))
+                    ax_var.bar(["VaR 95%"], [resumen['Valor en Riesgo (VaR 95%) USD M']])
+                    ax_var.set_ylabel("USD Millones")
+                    ax_var.set_title("VaR del Portafolio")
+                    st.pyplot(fig_var)
+                    st.markdown("📌 **Interpretación:** El VaR representa la pérdida máxima esperada en condiciones normales en el 95% de los casos. "
+                                "Un VaR más bajo indica menor riesgo de pérdida bajo escenarios de estrés moderado.")
+
+                    # Visualización: Top 5 asignaciones
+                    st.subheader("🏦 Top 5 Asignaciones Óptimas por Categoría")
                     top_resultado = resultado.sort_values('Asignación Óptima (%)', ascending=False).head(5).reset_index(drop=True)
 
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    bars = ax.bar(top_resultado['Categoría'], top_resultado['Asignación Óptima (%)'])
+                    fig3, ax3 = plt.subplots(figsize=(6, 3))
+                    bars = ax3.bar(top_resultado['Categoría'], top_resultado['Asignación Óptima (%)'])
 
                     for i, row in top_resultado.iterrows():
                         porcentaje = row['Asignación Óptima (%)']
                         monto = row['Valor Asignado (USD M)']
                         label = f"{porcentaje:.1f}% - ${monto:,.0f}M"
-                        ax.text(
+                        ax3.text(
                             bars[i].get_x() + bars[i].get_width() / 2,
                             bars[i].get_height() + 1,
                             label,
                             ha='center',
                             va='bottom',
-                            fontsize=9
+                            fontsize=8
                         )
 
-                    ax.set_ylabel("Asignación (%)")
-                    ax.set_title("Top 5 Asignaciones Óptimas por Categoría")
-                    st.pyplot(fig)
+                    ax3.set_ylabel("Asignación (%)")
+                    ax3.set_title("Top 5 por Asignación")
+                    st.pyplot(fig3)
+                    st.markdown("📌 **Interpretación:** Muestra las cinco categorías con mayor proporción asignada en el portafolio optimizado. "
+                                "Útil para entender dónde se concentra el capital tras la optimización.")
 
     # ===========================
     # PESTAÑA: SIMULACIÓN DE TASAS
@@ -104,9 +143,8 @@ if uploaded_file:
         st.subheader("Resultado de la Simulación")
         st.dataframe(df_sim[['Categoría', 'Tasa (%)', 'Tasa Simulada (%)', 'Interés Estimado (USD M)']])
 
-        # Gráfico de interés estimado simulado
         st.subheader("Interés Estimado por Categoría")
-        fig2, ax2 = plt.subplots(figsize=(8, 4))
+        fig2, ax2 = plt.subplots(figsize=(6, 3))
         df_sim_sorted = df_sim.sort_values('Interés Estimado (USD M)', ascending=False).head(5)
         bars2 = ax2.bar(df_sim_sorted['Categoría'], df_sim_sorted['Interés Estimado (USD M)'])
 
@@ -117,12 +155,14 @@ if uploaded_file:
                 f"${row['Interés Estimado (USD M)']:.1f}M",
                 ha='center',
                 va='bottom',
-                fontsize=9
+                fontsize=8
             )
 
         ax2.set_ylabel("Interés Estimado (USD M)")
-        ax2.set_title("Top 5 Categorías por Interés Estimado Simulado")
+        ax2.set_title("Top 5 Categorías por Interés Simulado")
         st.pyplot(fig2)
+        st.markdown("📌 **Interpretación:** Evalúa cómo cambiaría el ingreso financiero ante un aumento o disminución en las tasas. "
+                    "Útil para análisis de sensibilidad de ingresos al riesgo de mercado.")
 
     # ===========================
     # PESTAÑA: ANÁLISIS DE SENSIBILIDAD
@@ -143,13 +183,14 @@ if uploaded_file:
         df_resumen_sens = pd.DataFrame(resumenes)
         st.dataframe(df_resumen_sens)
 
-        # Gráfico de sensibilidad
-        fig3, ax3 = plt.subplots(figsize=(8, 4))
+        fig3, ax3 = plt.subplots(figsize=(6, 3))
         ax3.plot(df_resumen_sens["Cambio Tasa (%)"], df_resumen_sens["Interés Total Estimado (USD M)"], marker='o')
         ax3.set_title("Sensibilidad del Interés Total Estimado")
         ax3.set_xlabel("Cambio en la Tasa (%)")
         ax3.set_ylabel("Interés Estimado (USD M)")
         st.pyplot(fig3)
+        st.markdown("📌 **Interpretación:** Muestra cómo varía el ingreso total estimado ante cambios en tasas de interés. "
+                    "Ayuda a visualizar la sensibilidad general del portafolio.")
 
 else:
     st.warning("⚠️ Por favor, carga un archivo CSV desde la barra lateral para comenzar.")
