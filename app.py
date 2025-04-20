@@ -7,7 +7,7 @@ from modules.optimizer import run_optimization, simular_escenario
 
 # Configuración inicial
 st.set_page_config(page_title="Citi ALM Optimizer", layout="wide")
-st.title("Optimización y Simulación ALM - Citigroup por Oscar Zeledon - ADEN Business School")
+st.title("Optimización y Simulación ALM - Citigroup - Por Oscar Zeledon - ADEN Business School")
 
 # ========================
 # Carga de archivo
