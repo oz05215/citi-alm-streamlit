@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from modules.optimizer import run_optimization, simular_escenario
+from modules.optimizer import PARAM_DESCRIPTION
 
 # Configuración inicial
 st.set_page_config(page_title="Citi ALM Optimizer", layout="wide")
@@ -34,11 +35,13 @@ if uploaded_file:
     with opt_tab:
         st.header("Parámetros de Optimización")
         col1, col2 = st.columns(2)
-
+	st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
         with col1:
             tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
+
         with col2:
             liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100000.0)
+	    st.caption(PARAM_DESCRIPTION["liquidez_minima"])
 
         # Rango de tasas posibles
         activos = df[df['Tipo'] == 'Activo']
