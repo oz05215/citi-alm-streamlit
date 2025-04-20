@@ -35,10 +35,10 @@ if uploaded_file:
     with opt_tab:
         st.header("Parámetros de Optimización")
         col1, col2 = st.columns(2)
-	st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
+	
         with col1:
             tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
-
+	    st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
         with col2:
             liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100000.0)
 	    st.caption(PARAM_DESCRIPTION["liquidez_minima"])
