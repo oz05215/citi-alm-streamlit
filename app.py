@@ -1,18 +1,13 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from modules.optimizer import run_optimization, simular_escenario
+import numpy as np
+from modules.optimizer import run_optimization, simular_escenario, check_feasibility
 from modules.optimizer import PARAM_DESCRIPTION
 
-# Configuración inicial
 st.set_page_config(page_title="Citi ALM Optimizer", layout="wide")
-st.title("Optimización y Simulación ALM - Citigroup - Por Oscar Zeledon - ADEN Business School")
+st.title("Optimización y Simulación ALM - Citigroup - Por Oscar Zeledón - ADEN Business School")
 
-# ========================
-# Carga de archivo
-# ========================
 st.sidebar.header("📂 Cargar archivo de entrada")
 uploaded_file = st.sidebar.file_uploader("Selecciona un archivo CSV", type="csv")
 
@@ -26,107 +21,182 @@ if uploaded_file:
         "📊 Análisis de Sensibilidad"
     ])
 
-    # ===========================
-    # PESTAÑA: OPTIMIZACIÓN
-    # ===========================
+    def format_b(val):
+        return f"{val / 1e3:.3f}B"
+
     with opt_tab:
         st.header("Parámetros de Optimización")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            tasa_objetivo = st.slider("Tasa Objetivo Promedio (%)", 0.0, 10.0, 4.0)
-            st.caption(PARAM_DESCRIPTION["tasa_objetivo"])
-        with col2:
-            liquidez_minima = st.number_input("Liquidez mínima requerida (USD millones)", value=100.0)
-            st.caption(PARAM_DESCRIPTION["liquidez_minima"])
 
         activos = df[df['Tipo'] == 'Activo']
-        tasa_min = activos['Tasa (%)'].min()
-        tasa_max = activos['Tasa (%)'].max()
-        st.info(f"🔍 Rango de tasas posibles: entre **{tasa_min:.2f}%** y **{tasa_max:.2f}%**")
+        pasivos = df[df['Tipo'] == 'Pasivo']
+        total_activos = activos['Monto (USD M)'].sum()
 
-        if st.button("🚀 Ejecutar Optimización"):
-            if tasa_objetivo < tasa_min or tasa_objetivo > tasa_max:
-                st.error(f"La tasa objetivo de {tasa_objetivo}% está fuera del rango alcanzable.")
-            else:
-                resultado, resumen = run_optimization(df, tasa_objetivo, liquidez_minima)
+        tasa_promedio_actual = activos['Tasa (%)'].mean()
+        ganancia_esperada_actual = total_activos * tasa_promedio_actual / 100
+
+        dur_act_orig = np.sum(activos['Monto (USD M)'] * activos['Duración (años)']) / total_activos
+        dur_pas_orig = np.sum(pasivos['Monto (USD M)'] * pasivos['Duración (años)']) / pasivos['Monto (USD M)'].sum()
+        var_orig = np.std(activos['Tasa (%)'] / 100) * 1.65 * total_activos
+
+        liquidez_monto_actual = activos[activos['Categoría'] == 'Efectivo']['Monto (USD M)'].sum()
+        porcentaje_liquidez_actual = (liquidez_monto_actual / total_activos) * 100 if total_activos != 0 else 0
+
+        st.markdown(f"**💵 Liquidez Actual: {porcentaje_liquidez_actual:.2f}% ({liquidez_monto_actual:.2f} M USD)**")
+        st.markdown(f"**📈 Tasa Promedio Actual: {tasa_promedio_actual:.2f}%**")
+        st.markdown(f"**💰 Ganancia Estimada Actual: {ganancia_esperada_actual:.2f} M USD**")
+
+        st.markdown("### 📏 Tolerancias Globales (Escribe en %)")
+        tolerancia_duracion = st.number_input("Tolerancia de Desbalance de Duración (%)", value=5.0)
+        tolerancia_monto = st.number_input("Tolerancia de Variación del Monto Total (%)", value=5.0)
+
+        st.markdown("### 🎯 Parámetros de Optimización Globales")
+        tasa_min = float(np.min(activos['Tasa (%)']))
+        tasa_max = float(np.max(activos['Tasa (%)']))
+        tasa_objetivo = st.number_input("Tasa Objetivo Promedio (%)", min_value=tasa_min, max_value=tasa_max, value=round((tasa_min + tasa_max)/2, 2))
+        porcentaje_liquidez_objetivo = st.number_input("Liquidez Objetivo (% del total activos)", 0.0, 100.0, 5.0)
+
+        opcion_optimizar = st.selectbox(
+            "¿Hacia dónde deseas optimizar el monto total?",
+            options=["Cualquiera", "Subir Total", "Bajar Total"]
+        )
+        optimizar_hacia_arriba = opcion_optimizar == "Subir Total"
+        optimizar_hacia_abajo = opcion_optimizar == "Bajar Total"
+
+        st.markdown("### 🛠️ Tolerancia de Variación por Categoría (%)")
+        categorias = df['Categoría'].unique()
+        tolerancias_categorias = {}
+
+        with st.expander("Configurar Tolerancias Individuales por Categoría"):
+            for cat in categorias:
+                tolerancia = st.number_input(f"Tolerancia para {cat} (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0)
+                tolerancias_categorias[cat] = tolerancia
+
+        factible = check_feasibility(
+            df,
+            tasa_objetivo,
+            porcentaje_liquidez_objetivo,
+            tolerancia_duracion,
+            tolerancia_monto,
+            tolerancias_categorias,
+            optimizar_hacia_arriba,
+            optimizar_hacia_abajo
+        )
+
+        if not factible:
+            st.warning("⚠️ La combinación de restricciones y tolerancias no permite una solución viable.")
+        else:
+            if st.button("🚀 Ejecutar Optimización"):
+                resultado, resumen = run_optimization(
+                    df,
+                    tasa_objetivo,
+                    porcentaje_liquidez_objetivo,
+                    tolerancia_duracion,
+                    tolerancia_monto,
+                    tolerancias_categorias,
+                    optimizar_hacia_arriba,
+                    optimizar_hacia_abajo
+                )
 
                 if "error" in resumen:
-                    st.error(resumen["error"])
+                    st.error("❌ Optimización no exitosa.")
                 else:
                     st.success("✅ Optimización exitosa")
 
-                    st.subheader("Resumen de Optimización")
-                    df_resumen = pd.DataFrame(list(resumen.items()), columns=["Indicador", "Valor"])
-                    st.dataframe(df_resumen)
+                    st.subheader("📈 Liquidez Después de Optimización")
+                    st.write(f"💧 {resumen.get('Liquidez % Después', 0):.2f}% ({resumen.get('Liquidez Disponible (USD M)', 0):.2f} M USD)")
 
-                    st.subheader("Asignación Óptima")
-                    st.dataframe(resultado)
+                    st.subheader("📋 Datos Comparativos - Original + Optimizado")
+                    df_completo = df.copy()
+                    df_completo = df_completo.merge(
+                        resultado[['Categoría', 'Asignación Óptima (%)', 'Valor Asignado (USD M)']],
+                        on='Categoría',
+                        how='left'
+                    )
+                    st.dataframe(df_completo)
 
-                    st.markdown("""
-📘 **Descripción de las Categorías del Portafolio:**
-
-- **Préstamos (Activo):** Son colocaciones de crédito que realiza el banco a clientes individuales o corporativos. Representan una de las principales fuentes de ingreso financiero, ya que generan intereses. Desde la perspectiva del banco, es un **activo generador de rentabilidad**, aunque con riesgo crediticio.
-
-- **Inversiones (Activo):** Comprende instrumentos financieros como bonos, títulos públicos o privados que el banco mantiene para obtener rendimiento. Son activos utilizados para diversificar ingresos y gestionar excedentes de liquidez.
-
-- **Efectivo (Activo):** Representa el dinero disponible en caja o en cuentas a la vista en el banco central. Es el activo más líquido, fundamental para cubrir necesidades inmediatas y cumplir con requerimientos regulatorios de reservas mínimas.
-
-- **Depósitos (Pasivo):** Fondos que los clientes colocan en el banco, ya sea en cuentas corrientes, de ahorro o a plazo. Para el banco son un **pasivo**, ya que debe devolverlos en el futuro. Sin embargo, constituyen su principal fuente de fondeo.
-
-- **Deuda (Pasivo):** Obligaciones que el banco asume mediante la emisión de bonos u otros instrumentos de financiamiento. Es un pasivo que permite captar capital en los mercados para financiar actividades del banco, aunque a un costo mayor que los depósitos.
-
-✳️ *Estas categorías son clave para la gestión de activos y pasivos (ALM), reflejando cómo el banco obtiene y utiliza recursos para generar valor financiero de forma equilibrada y sostenible.*
-""")
-
-                    # Visualización: Duración
-                    st.subheader("📊 Comparación de Duración Activos vs Pasivos")
-                    fig_dur, ax_dur = plt.subplots(figsize=(6, 3))
-                    ax_dur.bar(["Duración Activos", "Duración Pasivos"], [
-                        resumen['Duración Promedio Activos (años)'],
-                        resumen['Duración Promedio Pasivos (años)']
-                    ])
-                    ax_dur.set_ylabel("Años")
-                    ax_dur.set_title("Duración Promedio")
+                    st.subheader("📊 Duración Promedio - Antes vs Después")
+                    fig_dur, ax_dur = plt.subplots()
+                    x = np.arange(2)
+                    antes = [dur_act_orig, dur_pas_orig]
+                    despues = [resumen['Duración Promedio Activos (años)'], resumen['Duración Promedio Pasivos (años)']]
+                    width = 0.35
+                    ax_dur.bar(x - width/2, antes, width, label="Antes", color='gray')
+                    ax_dur.bar(x + width/2, despues, width, label="Después", color='blue')
+                    ax_dur.set_xticks(x)
+                    ax_dur.set_xticklabels(["Activos", "Pasivos"])
+                    ax_dur.legend()
                     st.pyplot(fig_dur)
-                    st.markdown("📌 **Interpretación:** Esta gráfica compara la duración promedio ponderada entre activos y pasivos. "
-                                "Un desajuste muy alto puede indicar sensibilidad al riesgo de tasa de interés. Idealmente, las barras deberían estar lo más alineadas posible.")
 
-                    # Visualización: VaR
                     st.subheader("📉 Valor en Riesgo (VaR 95%)")
-                    fig_var, ax_var = plt.subplots(figsize=(6, 3))
-                    ax_var.bar(["VaR 95%"], [resumen['Valor en Riesgo (VaR 95%) USD M']])
+                    fig_var, ax_var = plt.subplots()
+                    valores = [var_orig, resumen['Valor en Riesgo (VaR 95%) USD M']]
+                    ax_var.bar(["Antes", "Después"], valores, color=["gray", "blue"])
+                    for i, val in enumerate(valores):
+                        ax_var.text(i, val + 0.01 * max(valores), format_b(val), ha='center')
                     ax_var.set_ylabel("USD Millones")
-                    ax_var.set_title("VaR del Portafolio")
                     st.pyplot(fig_var)
-                    st.markdown("📌 **Interpretación:** El VaR representa la pérdida máxima esperada en condiciones normales en el 95% de los casos. "
-                                "Un VaR más bajo indica menor riesgo de pérdida bajo escenarios de estrés moderado.")
 
-                    # Visualización: Top 5 asignaciones
-                    st.subheader("🏦 Top 5 Asignaciones Óptimas por Categoría")
-                    top_resultado = resultado.sort_values('Asignación Óptima (%)', ascending=False).head(5).reset_index(drop=True)
+                    st.subheader("🏦 Top 5 Asignaciones - Antes vs Después")
+                    top_resultado = resultado.sort_values('Valor Asignado (USD M)', ascending=False).head(5)
+                    categorias_top = top_resultado['Categoría'].tolist()
+                    top_orig = df[df['Categoría'].isin(categorias_top)].copy()
+                    top_orig = top_orig.set_index('Categoría').reindex(categorias_top).fillna(0).reset_index()
+                    fig_top, ax_top = plt.subplots(figsize=(9, 5))
+                    width = 0.35
+                    x = np.arange(len(categorias_top))
+                    ax_top.bar(x - width/2, top_orig['Monto (USD M)'], width, label="Antes", color='gray')
+                    ax_top.bar(x + width/2, top_resultado['Valor Asignado (USD M)'], width, label="Después", color='royalblue')
+                    ax_top.set_xticks(x)
+                    ax_top.set_xticklabels(categorias_top, rotation=45)
+                    ax_top.legend()
+                    st.pyplot(fig_top)
 
-                    fig3, ax3 = plt.subplots(figsize=(6, 3))
-                    bars = ax3.bar(top_resultado['Categoría'], top_resultado['Asignación Óptima (%)'])
+                    st.subheader("📄 Comparativa de Resultados - Indicadores")
 
-                    for i, row in top_resultado.iterrows():
-                        porcentaje = row['Asignación Óptima (%)']
-                        monto = row['Valor Asignado (USD M)']
-                        label = f"{porcentaje:.1f}% - ${monto:,.0f}M"
-                        ax3.text(
-                            bars[i].get_x() + bars[i].get_width() / 2,
-                            bars[i].get_height() + 1,
-                            label,
-                            ha='center',
-                            va='bottom',
-                            fontsize=8
-                        )
+                    ganancia_estimada_despues = resumen['Ganancia Estimada Después (USD M)'] if 'Ganancia Estimada Después (USD M)' in resumen else 0.0
 
-                    ax3.set_ylabel("Asignación (%)")
-                    ax3.set_title("Top 5 por Asignación")
-                    st.pyplot(fig3)
-                    st.markdown("📌 **Interpretación:** Muestra las cinco categorías con mayor proporción asignada en el portafolio optimizado. "
-                                "Útil para entender dónde se concentra el capital tras la optimización.")
+                    comparativa = {
+                        "Indicador": [
+                            "Duración Promedio Activos (años)",
+                            "Duración Promedio Pasivos (años)",
+                            "Tasa Promedio (%)",
+                            "Liquidez (%)",
+                            "Liquidez (USD M)",
+                            "Ganancia Estimada (USD M)",
+                            "Valor en Riesgo (VaR 95%)"
+                        ],
+                        "Antes": [
+                            dur_act_orig,
+                            dur_pas_orig,
+                            tasa_promedio_actual,
+                            porcentaje_liquidez_actual,
+                            liquidez_monto_actual,
+                            ganancia_esperada_actual,
+                            var_orig
+                        ],
+                        "Después": [
+                            resumen['Duración Promedio Activos (años)'],
+                            resumen['Duración Promedio Pasivos (años)'],
+                            resumen['Tasa Promedio del Portafolio (%)'],
+                            resumen['Liquidez % Después'],
+                            resumen['Liquidez Disponible (USD M)'],
+                            ganancia_estimada_despues,
+                            resumen['Valor en Riesgo (VaR 95%) USD M']
+                        ]
+                    }
+
+                    df_comp = pd.DataFrame(comparativa)
+                    df_comp["Diferencia Absoluta"] = df_comp["Después"] - df_comp["Antes"]
+                    df_comp["% Antes sobre Total"] = (df_comp["Antes"] / total_activos) * 100
+                    df_comp["% Después sobre Total"] = (df_comp["Después"] / total_activos) * 100
+
+                    st.dataframe(df_comp.style.format({
+                        "Antes": "{:.2f}",
+                        "Después": "{:.2f}",
+                        "Diferencia Absoluta": "{:.2f}",
+                        "% Antes sobre Total": "{:.2f}%",
+                        "% Después sobre Total": "{:.2f}%"
+                    }))
 
     # ===========================
     # PESTAÑA: SIMULACIÓN DE TASAS
@@ -143,8 +213,9 @@ if uploaded_file:
         st.subheader("Resultado de la Simulación")
         st.dataframe(df_sim[['Categoría', 'Tasa (%)', 'Tasa Simulada (%)', 'Interés Estimado (USD M)']])
 
+        # Gráfico de interés estimado simulado
         st.subheader("Interés Estimado por Categoría")
-        fig2, ax2 = plt.subplots(figsize=(6, 3))
+        fig2, ax2 = plt.subplots(figsize=(8, 4))
         df_sim_sorted = df_sim.sort_values('Interés Estimado (USD M)', ascending=False).head(5)
         bars2 = ax2.bar(df_sim_sorted['Categoría'], df_sim_sorted['Interés Estimado (USD M)'])
 
@@ -155,14 +226,12 @@ if uploaded_file:
                 f"${row['Interés Estimado (USD M)']:.1f}M",
                 ha='center',
                 va='bottom',
-                fontsize=8
+                fontsize=9
             )
 
         ax2.set_ylabel("Interés Estimado (USD M)")
-        ax2.set_title("Top 5 Categorías por Interés Simulado")
+        ax2.set_title("Top 5 Categorías por Interés Estimado Simulado")
         st.pyplot(fig2)
-        st.markdown("📌 **Interpretación:** Evalúa cómo cambiaría el ingreso financiero ante un aumento o disminución en las tasas. "
-                    "Útil para análisis de sensibilidad de ingresos al riesgo de mercado.")
 
     # ===========================
     # PESTAÑA: ANÁLISIS DE SENSIBILIDAD
@@ -183,14 +252,13 @@ if uploaded_file:
         df_resumen_sens = pd.DataFrame(resumenes)
         st.dataframe(df_resumen_sens)
 
-        fig3, ax3 = plt.subplots(figsize=(6, 3))
+        fig3, ax3 = plt.subplots(figsize=(8, 4))
         ax3.plot(df_resumen_sens["Cambio Tasa (%)"], df_resumen_sens["Interés Total Estimado (USD M)"], marker='o')
         ax3.set_title("Sensibilidad del Interés Total Estimado")
         ax3.set_xlabel("Cambio en la Tasa (%)")
         ax3.set_ylabel("Interés Estimado (USD M)")
         st.pyplot(fig3)
-        st.markdown("📌 **Interpretación:** Muestra cómo varía el ingreso total estimado ante cambios en tasas de interés. "
-                    "Ayuda a visualizar la sensibilidad general del portafolio.")
+
 
 else:
-    st.warning("⚠️ Por favor, carga un archivo CSV desde la barra lateral para comenzar.")
+    st.warning("⚠️ Por favor, carga un archivo CSV para comenzar.")
