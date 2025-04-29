@@ -18,24 +18,22 @@ def run_optimization(
     min_diversificacion_Categoría=0.01,
     peso_concentracion=0.5,
     peso_diversificacion=0.25,
-    penalizar_concentracion=True,    # <-- AGREGADO
-    penalizar_diversificacion=True   # <-- AGREGADO
+    penalizar_concentracion=True,
+    penalizar_diversificacion=True,
+    considerar_riesgo=False,
+    peso_riesgo=0.5
 ):
 
-
-    # Separar activos y pasivos
     activos = df[df['Tipo'] == 'Activo'].copy()
     pasivos = df[df['Tipo'] == 'Pasivo'].copy()
-    
+
     total_original = df['Monto (USD B)'].sum()
     monto_liquidez_objetivo = porcentaje_liquidez_objetivo / 100 * activos['Monto (USD B)'].sum()
     n = len(df)
 
-    # Configurar límites
     bounds = [(0, max_multiplicador_Categoría) for _ in range(n)] if optimizar_hacia_arriba else [(0, 1) for _ in range(n)]
     x0 = np.ones(n) / n
 
-    # Función objetivo
     def objective(x):
         activos_sel = x[:len(activos)]
         pasivos_sel = x[len(activos):]
@@ -54,12 +52,13 @@ def run_optimization(
                 if penalizar_diversificacion and peso < min_diversificacion_Categoría:
                     penalty_diversificacion += (min_diversificacion_Categoría - peso) ** 2
 
+        penalty_riesgo = 0
+        if considerar_riesgo and 'Peso de Riesgo' in df.columns:
+            riesgo_promedio = np.sum(x * df['Monto (USD B)'] * df['Peso de Riesgo']) / np.sum(x * df['Monto (USD B)'])
+            penalty_riesgo = peso_riesgo * riesgo_promedio
 
-        return abs(dur_act - dur_pas) + peso_concentracion * penalty_concentracion + peso_diversificacion * penalty_diversificacion
+        return abs(dur_act - dur_pas) + peso_concentracion * penalty_concentracion + peso_diversificacion * penalty_diversificacion + penalty_riesgo
 
-
-
-    # Restricciones
     constraints = []
 
     def constraint_duracion(x):
@@ -105,19 +104,18 @@ def run_optimization(
                 tol = tolerancias_Categorías[Categoría] / 100
                 monto_original = df.loc[i, 'Monto (USD B)']
 
-                def Categoría_max(x, idx=i, tol=tol, monto_original=monto_original):
+                def Categoria_max(x, idx=i, tol=tol, monto_original=monto_original):
                     return (tol * monto_original) - abs(x[idx] * monto_original - monto_original)
 
-                constraints.append({'type': 'ineq', 'fun': Categoría_max})
+                constraints.append({'type': 'ineq', 'fun': Categoria_max})
 
-    # Optimizar
     result = minimize(objective, x0, bounds=bounds, constraints=constraints)
 
     if result.success:
         x_opt = result.x
         df_resultado = df.copy()
         df_resultado['Asignación Óptima (%)'] = x_opt * 100
-        df_resultado['Valor Asignado (USD B)'] = df_resultado['Asignación Óptima (%)'] * df_resultado['Monto (USD B)'] * 1000 / 100
+        df_resultado['Valor Asignado (USD B)'] = (df_resultado['Asignación Óptima (%)'] / 100) * df_resultado['Monto (USD B)']
 
         dur_act = np.sum(x_opt[:len(activos)] * activos['Monto (USD B)'] * activos['Duración (años)']) / np.sum(x_opt[:len(activos)] * activos['Monto (USD B)'])
         dur_pas = np.sum(x_opt[len(activos):] * pasivos['Monto (USD B)'] * pasivos['Duración (años)']) / np.sum(x_opt[len(activos):] * pasivos['Monto (USD B)'])
@@ -127,23 +125,18 @@ def run_optimization(
         total_activos_despues = df_resultado[df_resultado['Tipo'] == 'Activo']['Valor Asignado (USD B)'].sum()
         liquidez_porcentaje_despues = (liquidez_despues / total_activos_despues) * 100 if total_activos_despues != 0 else 0
 
-#complex more VAR restrictions
-#        rendimientos = activos['Tasa (%)'] / 100
-#        var_portafolio = np.std(rendimientos) * 1.65 * np.sum(x_opt[:len(activos)] * #activos['Monto (USD B)'])
-
-# less restrictions
         rendimientos = activos['Tasa (%)'] / 100
         var_portafolio = np.std(rendimientos) * 1.65 * np.sum(x_opt[:len(activos)] * activos['Monto (USD B)'])
 
-
         tasa_prom_opt = np.sum(x_opt[:len(activos)] * activos['Monto (USD B)'] * activos['Tasa (%)']) / np.sum(x_opt[:len(activos)] * activos['Monto (USD B)'])
         ganancia_antes = np.sum(activos['Monto (USD B)']) * activos['Tasa (%)'].mean() / 100
-        ganancia_despues = total_activos_despues / 1000 * tasa_prom_opt / 100
+        ganancia_despues = total_activos_despues * tasa_prom_opt / 100
 
         resumen = {
             'Duración Promedio Activos (años)': round(dur_act, 2),
             'Duración Promedio Pasivos (años)': round(dur_pas, 2),
             'Índice de Balance Óptimo (IBO)': round(ibo, 4),
+            'Indice de Balance Óptimo (IBO)': round(ibo, 4),
             'Tasa Promedio del Portafolio (%)': round(tasa_prom_opt, 2),
             'Liquidez Disponible (USD B)': round(liquidez_despues, 2),
             'Liquidez % Después': round(liquidez_porcentaje_despues, 2),
@@ -157,20 +150,15 @@ def run_optimization(
     else:
         return df, {"error": "Optimización no exitosa. Ajusta restricciones o tolerancias."}
 
-
 def simular_escenario(df, cambio_tasa):
     df_simulado = df.copy()
 
     if 'Monto (USD B)' in df_simulado.columns:
         df_simulado['Tasa Simulada (%)'] = df_simulado['Tasa (%)'] + cambio_tasa
-        df_simulado['Interés Estimado (USD B)'] = (
-            df_simulado['Monto (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100
-        )
+        df_simulado['Interés Estimado (USD B)'] = (df_simulado['Monto (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100)
     elif 'Valor Asignado (USD B)' in df_simulado.columns:
         df_simulado['Tasa Simulada (%)'] = df_simulado['Tasa (%)'] + cambio_tasa
-        df_simulado['Interés Estimado (USD B)'] = (
-            df_simulado['Valor Asignado (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100
-        ) / 1_000  # convertir a billones
+        df_simulado['Interés Estimado (USD B)'] = (df_simulado['Valor Asignado (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100)
 
     if 'Categoría' not in df_simulado.columns:
         df_simulado['Categoría'] = df_simulado.index.astype(str)
@@ -180,13 +168,12 @@ def simular_escenario(df, cambio_tasa):
 
     return df_simulado
 
-
 def check_feasibility(*args, **kwargs):
     _, resumen = run_optimization(*args, **kwargs)
     return "error" not in resumen
-
 
 PARAM_DESCRIPTION = {
     "tasa_objetivo": "Tasa promedio objetivo del portafolio de activos.",
     "liquidez_minima": "Porcentaje mínimo de liquidez deseado respecto al total de activos."
 }
+
