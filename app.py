@@ -2,7 +2,17 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from modules.optimizer import run_optimization, simular_escenario, check_feasibility
+from modules.optimizer import (
+    run_optimization,
+    simular_escenario,
+    check_feasibility,
+    calcular_convexidad,
+    graficar_convexidad,
+    calcular_eve, 
+    PARAM_DESCRIPTION
+)
+
+
 from modules.optimizer import PARAM_DESCRIPTION
 
 st.set_page_config(page_title="Citi ALM Optimizer", layout="wide")
@@ -15,11 +25,14 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file, encoding='latin1')
     st.success("Archivo cargado correctamente ✅")
 
-    opt_tab, sim_tab, sens_tab = st.tabs([
+    opt_tab, sim_tab, sens_tab, convex_tab, eve_tab = st.tabs([
         "🔏 Optimización de Portafolio",
         "📈 Simulación de Tasas",
-        "📊 Análisis de Sensibilidad"
+        "📊 Análisis de Sensibilidad",
+        "🔁 Curva de Convexidad",
+        "💼 EVE (Valor Económico del Capital)"
     ])
+
 
     def format_b(val):
         return f"{val:.3f}B"
@@ -95,6 +108,17 @@ if uploaded_file:
         if not factible:
             st.warning("⚠️ La combinación de restricciones y tolerancias no permite una solución viable.")
         else:
+
+
+
+
+
+
+
+
+
+
+
             if st.button("🚀 Ejecutar Optimización"):
                 resultado, resumen = run_optimization(
                     df,
@@ -127,6 +151,9 @@ if uploaded_file:
                         'Valor Asignado (USD B)': 'sum'
                     })
 
+
+
+
                     activos_opt = resultado_agrupado[resultado_agrupado['Tipo'] == 'Activo']
                     rendimientos = activos_opt['Tasa (%)'] / 100
                     var_despues = np.std(rendimientos) * 1.65 * activos_opt['Valor Asignado (USD B)'].sum()
@@ -137,6 +164,90 @@ if uploaded_file:
 
                     st.subheader("📋 Datos Comparativos - Original + Optimizado")
                     st.dataframe(resultado_agrupado)
+
+
+
+                    # ===========================
+                    # 📈 Curva de Convexidad - Antes y Después
+                    # ===========================
+
+                    with convex_tab:
+                        if resultado is not None:
+                            tasas_eval = np.linspace(-0.03, 0.03, 13)
+                            _, convexidad_antes = calcular_convexidad(df, tasas_eval)
+                            _, convexidad_despues = calcular_convexidad(resultado, tasas_eval)
+                            fig_convex = graficar_convexidad(tasas_eval, convexidad_antes, convexidad_despues)
+
+                    # Agregar etiquetas de tasas en puntos base (ej: -300 bps)
+                            ax = fig_convex.axes[0]
+                            for i, tasa in enumerate(tasas_eval):
+                                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_despues[i]),
+                                    textcoords="offset points", xytext=(0, 5), ha='center', fontsize=8, color='orange')
+                                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_antes[i]),
+                                    textcoords="offset points", xytext=(0, -10), ha='center', fontsize=8, color='blue')
+
+                            st.subheader("📉 Curva de Convexidad del Portafolio de Activos")
+                            st.pyplot(fig_convex)
+
+                            st.markdown("""
+                    #### 🔍 Interpretación de la Curva de Convexidad
+                    La curva de convexidad muestra cómo cambia el valor total del portafolio de activos ante distintos cambios en la tasa de interés.
+                    
+                    - El eje X representa el cambio en la tasa de interés (en puntos base).
+                    - El eje Y muestra el valor estimado del portafolio bajo ese cambio de tasa.
+                    - Una curva más **pronunciada** indica **mayor sensibilidad** a los cambios de tasa.
+                    - Si la curva **sube más rápido** hacia los extremos, hay mayor **convexidad positiva**, lo cual es deseable desde la perspectiva de gestión de riesgo.
+                    
+                    Comparar las curvas **antes y después de la optimización** permite visualizar si el nuevo portafolio es **más estable ante shocks de tasas**.
+
+Una curva optimizada por encima de la original indica que:
+
+Se logró una estructura de portafolio más robusta ante cambios de tasa.
+Se maximizó el valor económico del capital (EVE, Economic Value of Equity).
+Se mejoró la protección del banco frente a riesgos de tasa de interés, lo cual es un objetivo central del ALM.
+                    """)
+
+                        else:
+                            st.info("Ejecuta primero la optimización para ver la curva de convexidad.")
+
+
+
+                    # ===========================
+                    # 💰 EVE Antes vs Después
+                    # ===========================
+                    with eve_tab:
+                        if resultado is not None:
+                            tasa_base = tasa_promedio_actual / 100  # convertir a decimal
+                            shocks = [-0.02, -0.01, 0.0, 0.01, 0.02]  # ±100 y ±200 puntos base
+
+                            df_eve_antes = calcular_eve(df, tasa_base, shocks, columna_monto='Monto (USD B)')
+                            df_eve_despues = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
+
+                            st.subheader("📉 Valor Económico del Capital (EVE) - Antes vs Después")
+
+                            fig_eve, ax_eve = plt.subplots()
+                            ax_eve.plot(df_eve_antes['Shock (%)'], df_eve_antes['EVE (USD B)'], label='Antes', marker='o', linestyle='-')
+                            ax_eve.plot(df_eve_despues['Shock (%)'], df_eve_despues['EVE (USD B)'], label='Después', marker='o', linestyle='--')
+
+                            ax_eve.set_title("Análisis EVE ante Shocks de Tasa")
+                            ax_eve.set_xlabel("Shock de Tasa (%)")
+                            ax_eve.set_ylabel("EVE (USD B)")
+                            ax_eve.axhline(0, color='gray', linestyle='--')
+                            ax_eve.legend()
+                            ax_eve.grid(True)
+                            st.pyplot(fig_eve)
+
+                            st.markdown("""
+                    **Interpretación**:
+                    - EVE representa el impacto en el valor económico del capital ante cambios paralelos en la curva de tasas.
+                    - Una curva más alta y estable indica mayor resiliencia del portafolio ante variaciones de tasas de interés.
+                    - Comparar las líneas *Antes* y *Después* permite evaluar si la optimización mejoró la sensibilidad estructural del balance.
+                    """)
+
+
+                        else:
+                            st.info("Ejecuta primero la optimización para ver el análisis EVE.")
+
 
 
                     # ===========================
