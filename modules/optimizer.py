@@ -2,7 +2,72 @@
 
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.optimize import minimize
+
+
+
+
+def calcular_eve(df, tasa_base, shocks, columna_monto='Monto (USD B)'):
+    activos = df[df['Tipo'] == 'Activo']
+    pasivos = df[df['Tipo'] == 'Pasivo']
+    
+    resultados = []
+
+    for shock in shocks:
+        tasa_chocada = tasa_base + shock
+        
+        vp_activos = np.sum(activos[columna_monto] / (1 + tasa_chocada) ** activos['Duración (años)'])
+        vp_pasivos = np.sum(pasivos[columna_monto] / (1 + tasa_chocada) ** pasivos['Duración (años)'])
+
+        eve = vp_activos - vp_pasivos
+        resultados.append({'Shock (%)': shock * 100, 'EVE (USD B)': eve})
+
+    return pd.DataFrame(resultados)
+
+
+
+
+def calcular_convexidad(df, tasas_cambio):
+    activos = df[df['Tipo'] == 'Activo']
+    convexidad = []
+
+    # Detectar la columna de monto relevante
+    if 'Valor Asignado (USD B)' in activos.columns:
+        montos = activos['Valor Asignado (USD B)']
+    else:
+        montos = activos['Monto (USD B)']
+
+    duraciones = activos['Duración (años)']
+    
+    for delta in tasas_cambio:
+        cambio_precio = -duraciones * delta + 0.5 * (duraciones ** 2) * (delta ** 2)
+        valor_cambiado = montos * (1 + cambio_precio)
+        convexidad.append(valor_cambiado.sum())
+
+    return tasas_cambio, convexidad
+
+
+
+def graficar_convexidad(tasas_cambio, convexidad_antes, convexidad_despues=None):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(tasas_cambio, convexidad_antes, label='Antes de Optimizar', marker='o')
+    if convexidad_despues is not None:
+        ax.plot(tasas_cambio, convexidad_despues, label='Después de Optimizar', marker='o')
+
+    # Línea horizontal en el valor base (cuando delta = 0)
+    base_valor = convexidad_antes[np.where(tasas_cambio == 0)[0][0]]
+    ax.axhline(y=base_valor, color='gray', linestyle='--', linewidth=1)
+    ax.text(tasas_cambio[-1], base_valor, f"Valor Base ≈ {base_valor:.2f}B", va='bottom', ha='right', fontsize=9, color='gray')
+
+    ax.set_title("Curva de Convexidad del Portafolio de Activos")
+    ax.set_xlabel("Cambio en la Tasa (%)")
+    ax.set_ylabel("Valor Total Estimado (USD B)")
+    ax.legend()
+    ax.grid(True)
+    return fig
+
+
 
 def run_optimization(
     df,
@@ -176,4 +241,5 @@ PARAM_DESCRIPTION = {
     "tasa_objetivo": "Tasa promedio objetivo del portafolio de activos.",
     "liquidez_minima": "Porcentaje mínimo de liquidez deseado respecto al total de activos."
 }
+
 
