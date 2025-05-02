@@ -23,13 +23,18 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file, encoding='latin1')
     st.success("Archivo cargado correctamente ✅")
 
-    opt_tab, sim_tab, sens_tab, convex_tab, eve_tab, frontera_tab = st.tabs([
+    opt_tab, nii_tab, sim_tab, convex_tab, eve_tab, gap_tab = st.tabs([
         "🔏 Optimización de Portafolio",
+        "📊 NII Simulado",
+#        "📊 Análisis de Sensibilidad",
         "📈 Simulación de Tasas",
-        "📊 Análisis de Sensibilidad",
         "🔁 Curva de Convexidad",
         "💼 EVE (Valor Económico del Capital)",
-        "📉 Fronteras Eficientes"
+        "🔍 Gap de Liquidez",
+
+#        "💰 Cashflow Matching",
+#        "📉 Fronteras Eficientes"
+
     ])
 
     def format_b(val):
@@ -496,49 +501,49 @@ if uploaded_file:
     # ===========================
     # PESTAÑA: ANÁLISIS DE SENSIBILIDAD
     # ===========================
-        with sens_tab:
-            st.header("Análisis de Sensibilidad a Cambios en la Tasa")
-
-            cambios = [-2.0, -1.0, 0.0, 1.0, 2.0]
-            resumenes = []
-
-            if 'resultado' in st.session_state:
-                df_optimizado = st.session_state['resultado']
-            else:
-                df_optimizado = df.copy()
-
-            for delta in cambios:
-                df_sim_antes, df_sim_despues, resumen_impacto = simular_escenario(df, df_optimizado, delta)
-
-                resumenes.append({
-                    "Cambio en Tasa (%)": delta,
-                    "Impacto Neto Antes (USD B)": round(resumen_impacto['Impacto Antes'], 3),
-                    "Impacto Neto Después (USD B)": round(resumen_impacto['Impacto Después'], 3),
-                })
-
-            df_resumen_sens = pd.DataFrame(resumenes)
-
-            st.subheader("Tabla de Resultados de Sensibilidad")
-            st.dataframe(df_resumen_sens)
-
-            # Graficar ambas curvas
-            fig3, ax3 = plt.subplots(figsize=(8, 4))
-            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Antes (USD B)"], marker='o', linestyle='-', label="Antes", color="gray")
-            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Después (USD B)"], marker='o', linestyle='--', label="Después", color="royalblue")
-            ax3.axhline(0, color='black', linestyle='--')
-            ax3.set_title("Sensibilidad del Impacto Neto ante Cambios de Tasa")
-            ax3.set_xlabel("Cambio en la Tasa (%)")
-            ax3.set_ylabel("Impacto Neto Estimado (USD B)")
-            ax3.legend()
-            ax3.grid(True)
-            st.pyplot(fig3)
-
-            st.subheader("Interpretación del Análisis de Sensibilidad")
-            st.markdown("""
-            - Un impacto positivo significa que **el banco se beneficia** ante el cambio de tasas.
-            - Un impacto negativo indica que **el banco pierde rentabilidad** ante el cambio de tasas.
-            - El gráfico compara el comportamiento del portafolio **antes y después de optimizar**.
-            """)
+#        with sens_tab:
+#            st.header("Análisis de Sensibilidad a Cambios en la Tasa")
+#
+#            cambios = [-2.0, -1.0, 0.0, 1.0, 2.0]
+#            resumenes = []
+#
+#            if 'resultado' in st.session_state:
+#                df_optimizado = st.session_state['resultado']
+#            else:
+#                df_optimizado = df.copy()
+#
+#            for delta in cambios:
+#                df_sim_antes, df_sim_despues, resumen_impacto = simular_escenario(df, df_optimizado, delta)
+#
+#                resumenes.append({
+#                    "Cambio en Tasa (%)": delta,
+#                    "Impacto Neto Antes (USD B)": round(resumen_impacto['Impacto Antes'], 3),
+#                    "Impacto Neto Después (USD B)": round(resumen_impacto['Impacto Después'], 3),
+#                })
+#
+#            df_resumen_sens = pd.DataFrame(resumenes)
+#
+#            st.subheader("Tabla de Resultados de Sensibilidad")
+#            st.dataframe(df_resumen_sens)
+#
+#            # Graficar ambas curvas
+#            fig3, ax3 = plt.subplots(figsize=(8, 4))
+#            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Antes (USD B)"], marker='o', linestyle='-', label="Antes", color="gray")
+#            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Después (USD B)"], marker='o', linestyle='--', label="Después", color="royalblue")
+#            ax3.axhline(0, color='black', linestyle='--')
+#            ax3.set_title("Sensibilidad del Impacto Neto ante Cambios de Tasa")
+#            ax3.set_xlabel("Cambio en la Tasa (%)")
+#            ax3.set_ylabel("Impacto Neto Estimado (USD B)")
+#            ax3.legend()
+#            ax3.grid(True)
+#            st.pyplot(fig3)
+#
+#            st.subheader("Interpretación del Análisis de Sensibilidad")
+#            st.markdown("""
+#            - Un impacto positivo significa que **el banco se beneficia** ante el cambio de tasas.
+#            - Un impacto negativo indica que **el banco pierde rentabilidad** ante el cambio de tasas.
+#            - El gráfico compara el comportamiento del portafolio **antes y después de optimizar**.
+#            """)
 
 
     # ===========================
@@ -622,79 +627,271 @@ if uploaded_file:
         else:
             st.info("Ejecuta primero la optimización para ver el análisis EVE.")
 
-    # FRONTERA TAB
-    with frontera_tab:
-        st.header("📉 Fronteras Eficientes: EVE vs Duración y Sensibilidad vs IBO")
+#    # FRONTERA TAB
+#    with frontera_tab:
+#        st.header("📉 Fronteras Eficientes: EVE vs Duración y Sensibilidad vs IBO")
+#
+#        if 'resultado' not in st.session_state:
+#            st.info("Ejecuta la optimización primero para generar las fronteras eficientes.")
+#        else:
+#            resultado = st.session_state['resultado']
+#            tasa_base = tasa_promedio_actual / 100
+#            shocks = [-0.02, -0.01, 0.01, 0.02]
+#
+#            df_eve = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
+#            eve_promedio = df_eve['EVE (USD B)'].mean()
+#
+#            activos = resultado[resultado['Tipo'] == 'Activo']
+#            duracion_activos = np.sum(activos['Valor Asignado (USD B)'] * activos['Duración (años)']) / np.sum(activos['Valor Asignado (USD B)'])
+#
+#            pasivos = resultado[resultado['Tipo'] == 'Pasivo']
+#            dur_pasivos = np.sum(pasivos['Valor Asignado (USD B)'] * pasivos['Duración (años)']) / np.sum(pasivos['Valor Asignado (USD B)'])
+#            ibo = 1 - abs(duracion_activos - dur_pasivos) / duracion_activos if duracion_activos != 0 else 0
+#
+#            impacto_base = np.sum(activos['Valor Asignado (USD B)'] * activos['Tasa (%)'] / 100)
+#            sensibilidad_score = 0
+#            ganancia_total = 0
+#            perdida_total = 0
+#            for delta in shocks:
+#                tasa_sim = activos['Tasa (%)'] + delta * 100
+#                interes = activos['Valor Asignado (USD B)'] * tasa_sim / 100
+#                impacto = interes.sum()
+#                if delta < 0:
+#                    perdida_total += max(0, impacto_base - impacto)
+#                else:
+#                    ganancia_total += max(0, impacto - impacto_base)
+#            sensibilidad_score = perdida_total - 1.25 * ganancia_total
+#
+#            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+#            # 🔵 EXPLICACIÓN DEL GRÁFICO: EVE vs DURACIÓN PROMEDIO
+#            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+#            st.markdown("""
+#            ### 🔷 Interpretación: EVE vs Duración Promedio
+#            - **EVE (Economic Value of Equity)** representa la estabilidad del valor del portafolio ante shocks de tasas.
+#            - **Duración promedio** mide la exposición del portafolio a tasas de interés: duraciones largas implican mayor riesgo de tasa.
+#            - Idealmente se busca **maximizar el EVE** manteniendo una **duración razonable (ej. entre 2 y 4 años)**.
+#            - Un buen punto se ubica en la parte **superior izquierda del gráfico** (alto EVE, duración moderada).
+#            """)
+#
+#            fig1, ax1 = plt.subplots()
+#            ax1.scatter(duracion_activos, eve_promedio, color='royalblue', s=100)
+#            ax1.set_title("Frontera Eficiente: EVE vs Duración Promedio Activos")
+#            ax1.set_xlabel("Duración Promedio Activos (años)")
+#            ax1.set_ylabel("EVE Promedio (USD B)")
+#            ax1.grid(True)
+#            st.pyplot(fig1)
+#
+#            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+#            # 🟠 EXPLICACIÓN DEL GRÁFICO: SENSIBILIDAD vs IBO
+#            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+#            st.markdown("""
+#            ### 🟠 Interpretación: Sensibilidad a Tasas vs IBO
+#            - **Sensibilidad** representa el efecto neto de cambios en tasas sobre los ingresos (penaliza más las pérdidas).
+#            - **IBO (Índice de Balance Óptimo)** mide el alineamiento entre duración de activos y pasivos (ideal ≈ 1).
+#            - Se busca una combinación donde el **IBO sea alto** (cercano a 1) y la **sensibilidad sea baja (negativa, pero controlada)**.
+#            - El mejor punto está en la **esquina inferior derecha del gráfico**: bajo impacto negativo y alto balance.
+#            """)
+#
+#            fig2, ax2 = plt.subplots()
+#            ax2.scatter(ibo, sensibilidad_score, color='orange', s=100)
+#            ax2.set_title("Frontera Eficiente: Sensibilidad a Tasas vs IBO")
+#            ax2.set_xlabel("Índice de Balance Óptimo (IBO)")
+#            ax2.set_ylabel("Sensibilidad (pérdidas - 1.25 * ganancias)")
+#            ax2.grid(True)
+#            st.pyplot(fig2)
+#
+
+
+# GAP LIQUIDEZ TAB
+
+    with gap_tab:
+        st.header("💧 Gap de Liquidez por Buckets Temporales")
 
         if 'resultado' not in st.session_state:
-            st.info("Ejecuta la optimización primero para generar las fronteras eficientes.")
+            st.info("Ejecuta primero la optimización para analizar los gaps.")
         else:
             resultado = st.session_state['resultado']
-            tasa_base = tasa_promedio_actual / 100
-            shocks = [-0.02, -0.01, 0.01, 0.02]
 
-            df_eve = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
-            eve_promedio = df_eve['EVE (USD B)'].mean()
+            def calcular_gap(df, etiqueta):
+                buckets = ['0-30 días', '31-90 días', '91-180 días', '181-365 días', '1-3 años', '3-5 años', '5+ años']
+                rangos = [30, 90, 180, 365, 3*365, 5*365, np.inf]
+                df = df.copy()
 
-            activos = resultado[resultado['Tipo'] == 'Activo']
-            duracion_activos = np.sum(activos['Valor Asignado (USD B)'] * activos['Duración (años)']) / np.sum(activos['Valor Asignado (USD B)'])
+                monto_col = 'Valor Asignado (USD B)' if 'Valor Asignado (USD B)' in df.columns else 'Monto (USD B)'
 
-            pasivos = resultado[resultado['Tipo'] == 'Pasivo']
-            dur_pasivos = np.sum(pasivos['Valor Asignado (USD B)'] * pasivos['Duración (años)']) / np.sum(pasivos['Valor Asignado (USD B)'])
-            ibo = 1 - abs(duracion_activos - dur_pasivos) / duracion_activos if duracion_activos != 0 else 0
+                df['Dias'] = df['Duración (años)'] * 365
+                df['Bucket'] = pd.cut(df['Dias'], bins=[0] + rangos, labels=buckets, right=True)
 
-            impacto_base = np.sum(activos['Valor Asignado (USD B)'] * activos['Tasa (%)'] / 100)
-            sensibilidad_score = 0
-            ganancia_total = 0
-            perdida_total = 0
-            for delta in shocks:
-                tasa_sim = activos['Tasa (%)'] + delta * 100
-                interes = activos['Valor Asignado (USD B)'] * tasa_sim / 100
-                impacto = interes.sum()
-                if delta < 0:
-                    perdida_total += max(0, impacto_base - impacto)
-                else:
-                    ganancia_total += max(0, impacto - impacto_base)
-            sensibilidad_score = perdida_total - 1.25 * ganancia_total
+                activos = df[df['Tipo'] == 'Activo'].groupby('Bucket')[monto_col].sum()
+                pasivos = df[df['Tipo'] == 'Pasivo'].groupby('Bucket')[monto_col].sum()
 
-            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-            # 🔵 EXPLICACIÓN DEL GRÁFICO: EVE vs DURACIÓN PROMEDIO
-            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+                df_gap = pd.DataFrame({
+                    'Activos (USD B)': activos,
+                    'Pasivos (USD B)': pasivos
+                }).fillna(0)
+
+                df_gap['Gap (USD B)'] = df_gap['Activos (USD B)'] - df_gap['Pasivos (USD B)']
+                df_gap['Gap Acumulado (USD B)'] = df_gap['Gap (USD B)'].cumsum()
+                df_gap['Escenario'] = etiqueta
+
+                return df_gap.reset_index()
+
+            df_gap_antes = calcular_gap(df, "Antes")
+            df_gap_despues = calcular_gap(resultado, "Después")
+
+            st.subheader("📋 Gap de Liquidez - Antes de Optimizar")
+            st.dataframe(df_gap_antes)
+
+            st.subheader("📋 Gap de Liquidez - Después de Optimizar")
+            st.dataframe(df_gap_despues)
+
+            # Gráfico acumulado
+            st.subheader("📈 Gap Acumulado - Comparación Visual")
+
+            fig_gap, ax_gap = plt.subplots(figsize=(12, 5))
+            buckets = df_gap_antes['Bucket']
+            x = np.arange(len(buckets))
+            width = 0.35
+
+            ax_gap.bar(x - width, df_gap_antes['Gap Acumulado (USD B)'], width, label='Antes', color='gray')
+            ax_gap.bar(x + width, df_gap_despues['Gap Acumulado (USD B)'], width, label='Después', color='royalblue')
+
+            ax_gap.set_xticks(x)
+            ax_gap.set_xticklabels(buckets, rotation=45, ha='right')
+            ax_gap.set_ylabel("Gap Acumulado (USD B)")
+            ax_gap.set_title("Gap de Liquidez Acumulado por Bucket")
+            ax_gap.legend()
+            ax_gap.grid(True)
+
+            st.pyplot(fig_gap)
+
+
+
+
+    with nii_tab:
+        st.header("📊 NII Simulado - Net Interest Income (Antes vs Después)")
+
+        if 'resultado' not in st.session_state:
+            st.info("⚠️ Ejecuta primero la optimización para simular el NII.")
+        else:
+            df_antes = df.copy()
+            df_despues = st.session_state['resultado'].copy()
+
+            shocks = [-0.02, -0.01, 0.0, 0.01, 0.02]
+            resumen_nii = []
+
+            for shock in shocks:
+                tasa_simulada = df_antes['Tasa (%)'] + shock * 100
+
+                # Antes de la optimización
+                df_antes['Tasa Simulada (%)'] = tasa_simulada
+                df_antes['NII Simulado'] = df_antes['Monto (USD B)'] * df_antes['Tasa Simulada (%)'] / 100
+                df_antes.loc[df_antes['Tipo'] == 'Pasivo', 'NII Simulado'] *= -1
+                nii_antes = df_antes['NII Simulado'].sum()
+
+                # Después de la optimización
+                df_despues['Tasa Simulada (%)'] = df_despues['Tasa (%)'] + shock * 100
+                df_despues['NII Simulado'] = df_despues['Valor Asignado (USD B)'] * df_despues['Tasa Simulada (%)'] / 100
+                df_despues.loc[df_despues['Tipo'] == 'Pasivo', 'NII Simulado'] *= -1
+                nii_despues = df_despues['NII Simulado'].sum()
+
+                resumen_nii.append({
+                    "Shock de Tasa (%)": shock * 100,
+                    "NII Antes (USD B)": round(nii_antes, 3),
+                    "NII Después (USD B)": round(nii_despues, 3)
+                })
+
+            df_resumen_nii = pd.DataFrame(resumen_nii)
+
+            st.subheader("📋 Tabla de Resultados del NII Simulado")
+            st.dataframe(df_resumen_nii)
+
+            # Gráfico de comparación NII
+            fig_nii, ax_nii = plt.subplots(figsize=(8, 4))
+            ax_nii.plot(df_resumen_nii["Shock de Tasa (%)"], df_resumen_nii["NII Antes (USD B)"],
+                        marker='o', label='Antes', color='gray')
+            ax_nii.plot(df_resumen_nii["Shock de Tasa (%)"], df_resumen_nii["NII Después (USD B)"],
+                        marker='o', linestyle='--', label='Después', color='royalblue')
+            ax_nii.axhline(0, color='black', linestyle='--')
+            ax_nii.set_title("Net Interest Income (NII) bajo Diferentes Shocks de Tasa")
+            ax_nii.set_xlabel("Shock de Tasa (%)")
+            ax_nii.set_ylabel("NII Estimado (USD B)")
+            ax_nii.legend()
+            ax_nii.grid(True)
+            st.pyplot(fig_nii)
+
             st.markdown("""
-            ### 🔷 Interpretación: EVE vs Duración Promedio
-            - **EVE (Economic Value of Equity)** representa la estabilidad del valor del portafolio ante shocks de tasas.
-            - **Duración promedio** mide la exposición del portafolio a tasas de interés: duraciones largas implican mayor riesgo de tasa.
-            - Idealmente se busca **maximizar el EVE** manteniendo una **duración razonable (ej. entre 2 y 4 años)**.
-            - Un buen punto se ubica en la parte **superior izquierda del gráfico** (alto EVE, duración moderada).
+            ### 🧾 Interpretación
+            - **NII (Net Interest Income)** representa la ganancia neta por intereses: activos generan ingresos y pasivos implican costos.
+            - **Eje X**: simula shocks paralelos de tasa en ±200 puntos base.
+            - **Eje Y**: muestra el NII total estimado del portafolio.
+            - Una línea más estable y más alta (azul) después de la optimización es preferible.
+            - Permite evaluar si el portafolio gana robustez y rentabilidad frente a cambios en tasas.
             """)
 
-            fig1, ax1 = plt.subplots()
-            ax1.scatter(duracion_activos, eve_promedio, color='royalblue', s=100)
-            ax1.set_title("Frontera Eficiente: EVE vs Duración Promedio Activos")
-            ax1.set_xlabel("Duración Promedio Activos (años)")
-            ax1.set_ylabel("EVE Promedio (USD B)")
-            ax1.grid(True)
-            st.pyplot(fig1)
 
-            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-            # 🟠 EXPLICACIÓN DEL GRÁFICO: SENSIBILIDAD vs IBO
-            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-            st.markdown("""
-            ### 🟠 Interpretación: Sensibilidad a Tasas vs IBO
-            - **Sensibilidad** representa el efecto neto de cambios en tasas sobre los ingresos (penaliza más las pérdidas).
-            - **IBO (Índice de Balance Óptimo)** mide el alineamiento entre duración de activos y pasivos (ideal ≈ 1).
-            - Se busca una combinación donde el **IBO sea alto** (cercano a 1) y la **sensibilidad sea baja (negativa, pero controlada)**.
-            - El mejor punto está en la **esquina inferior derecha del gráfico**: bajo impacto negativo y alto balance.
-            """)
 
-            fig2, ax2 = plt.subplots()
-            ax2.scatter(ibo, sensibilidad_score, color='orange', s=100)
-            ax2.set_title("Frontera Eficiente: Sensibilidad a Tasas vs IBO")
-            ax2.set_xlabel("Índice de Balance Óptimo (IBO)")
-            ax2.set_ylabel("Sensibilidad (pérdidas - 1.25 * ganancias)")
-            ax2.grid(True)
-            st.pyplot(fig2)
-
+#    with cashflow_tab:
+#        st.header("💰 Cash Flow Matching - Comparativo Antes vs Después")
+#
+#       if 'resultado' not in st.session_state:
+#            st.info("⚠️ Ejecuta primero la optimización para simular el Cash Flow Matching.")
+#        else:
+#            def calcular_cashflow(df, label):
+#                df_temp = df.copy()
+#
+#                # Si no existe, crear la columna Bucket en base a duración
+#                if 'Bucket' not in df_temp.columns:
+#                    bins = [0, 1, 3, 5, 10, np.inf]
+#                    labels = ["0-1 años", "1-3 años", "3-5 años", "5-10 años", "10+ años"]
+#                    df_temp['Bucket'] = pd.cut(df_temp['Duración (años)'], bins=bins, labels=labels, right=False)
+#
+#                # Si no existe, asumir que los valores asignados son iguales al monto original
+#                if 'Valor Asignado (USD B)' not in df_temp.columns:
+#                    df_temp['Valor Asignado (USD B)'] = df_temp['Monto (USD B)']
+#
+#                flujo = df_temp.groupby(['Bucket', 'Tipo'])['Valor Asignado (USD B)'].sum().unstack().fillna(0)
+#                flujo['Neto'] = flujo.get('Activo', 0) - flujo.get('Pasivo', 0)
+#                flujo.reset_index(inplace=True)
+#                flujo['Escenario'] = label
+#                return flujo
+#
+#            # Calcular antes y después
+#            df_cashflow_antes = calcular_cashflow(df, "Antes")
+#            df_cashflow_despues = calcular_cashflow(st.session_state['resultado'], "Después")
+#
+#            # Mostrar tablas por separado
+#            st.subheader("📋 Cash Flow Matching - Antes de Optimizar")
+#            st.dataframe(df_cashflow_antes)
+#
+#            st.subheader("📋 Cash Flow Matching - Después de Optimizar")
+#            st.dataframe(df_cashflow_despues)
+#
+#            # Graficar comparación
+#            st.subheader("📊 Comparación Visual del Matching por Bucket")
+#
+#            fig, ax = plt.subplots(figsize=(12, 6))
+#            x = np.arange(len(df_cashflow_antes['Bucket']))
+#            width = 0.35
+#
+#            ax.bar(x - width/2, df_cashflow_antes['Neto'], width, label="Antes", color='gray')
+#            ax.bar(x + width/2, df_cashflow_despues['Neto'], width, label="Después", color='royalblue')
+#
+#            ax.set_xticks(x)
+#            ax.set_xticklabels(df_cashflow_antes['Bucket'], rotation=45)
+#            ax.set_ylabel("Flujo Neto (USD B)")
+#            ax.set_title("Cash Flow Matching por Bucket - Antes vs Después")
+#            ax.legend()
+#            ax.grid(True)
+#
+#            st.pyplot(fig)
+#
+#            st.markdown("""
+#            **Interpretación:**
+#            - Cada barra muestra el **flujo neto** (activos menos pasivos) por periodo de tiempo.
+#            - El objetivo es que el flujo neto esté lo más cercano posible a cero en cada bucket, lo que indica un mejor emparejamiento.
+#            - La comparación permite evaluar si la optimización logró mejorar la cobertura de pasivos con activos de vencimiento similar.
+#            """)
 
 
 
