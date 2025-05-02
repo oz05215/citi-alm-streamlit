@@ -76,6 +76,7 @@ def run_optimization(
     tolerancia_duracion=5.0,
     tolerancia_monto=5.0,
     tolerancias_Categorías=None,
+    tolerancias_Subtipos=None,
     optimizar_hacia_arriba=False,
     optimizar_hacia_abajo=False,
     max_multiplicador_Categoría=2.0,
@@ -83,11 +84,16 @@ def run_optimization(
     min_diversificacion_Categoría=0.01,
     peso_concentracion=0.5,
     peso_diversificacion=0.25,
+    peso_var=0.1,
     penalizar_concentracion=True,
     penalizar_diversificacion=True,
     considerar_riesgo=False,
-    peso_riesgo=0.5
+    peso_riesgo=0.5,
+    var_original=None,  # 👈 nuevo
+    porcentaje_var_tolerado=None,  # 👈 nuevo
+    cambio_tasa_simulacion=0.0,
 ):
+
 
     activos = df[df['Tipo'] == 'Activo'].copy()
     pasivos = df[df['Tipo'] == 'Pasivo'].copy()
@@ -99,16 +105,30 @@ def run_optimization(
     bounds = [(0, max_multiplicador_Categoría) for _ in range(n)] if optimizar_hacia_arriba else [(0, 1) for _ in range(n)]
     x0 = np.ones(n) / n
 
+
+    var_original = np.std(activos['Tasa (%)'] / 100) * 1.65 * np.sum(activos['Monto (USD B)'])
+
+
+
+
+
+
     def objective(x):
         activos_sel = x[:len(activos)]
         pasivos_sel = x[len(activos):]
 
+        # ──────────────────────────────
+        # Cálculo de Duración (para IBO)
+        # ──────────────────────────────
         dur_act = np.sum(activos_sel * activos['Monto (USD B)'] * activos['Duración (años)']) / np.sum(activos_sel * activos['Monto (USD B)'])
         dur_pas = np.sum(pasivos_sel * pasivos['Monto (USD B)'] * pasivos['Duración (años)']) / np.sum(pasivos_sel * pasivos['Monto (USD B)'])
+        descalce_duracion = 0.5 * abs(dur_act - dur_pas)
 
+        # ──────────────────────────────
+        # Penalización Concentración / Diversificación
+        # ──────────────────────────────
         penalty_concentracion = 0
         penalty_diversificacion = 0
-
         if penalizar_concentracion or penalizar_diversificacion:
             pesos = (x * df['Monto (USD B)']) / np.sum(x * df['Monto (USD B)'])
             for peso in pesos:
@@ -117,12 +137,109 @@ def run_optimization(
                 if penalizar_diversificacion and peso < min_diversificacion_Categoría:
                     penalty_diversificacion += (min_diversificacion_Categoría - peso) ** 2
 
+        # ──────────────────────────────
+        # Penalización Riesgo Promedio
+        # ──────────────────────────────
         penalty_riesgo = 0
         if considerar_riesgo and 'Peso de Riesgo' in df.columns:
             riesgo_promedio = np.sum(x * df['Monto (USD B)'] * df['Peso de Riesgo']) / np.sum(x * df['Monto (USD B)'])
             penalty_riesgo = peso_riesgo * riesgo_promedio
 
-        return abs(dur_act - dur_pas) + peso_concentracion * penalty_concentracion + peso_diversificacion * penalty_diversificacion + penalty_riesgo
+        # ──────────────────────────────
+        # Penalización por pasivos caros y activos poco defensivos
+        # ──────────────────────────────
+        indices_pasivos_caros = pasivos[(pasivos['Tasa (%)'] > 4) & (pasivos['Duración (años)'] > 3)].index
+        penalidad_pasivos_largos_caros = np.sum([pasivos_sel[i - len(activos)] for i in indices_pasivos_caros]) * 0.5
+
+        indices_activos_debiles = activos[(activos['Duración (años)'] > 5) & (activos['Tasa (%)'] < 2)].index
+        penalidad_activos_poco_defensivos = np.sum([activos_sel[i] for i in indices_activos_debiles]) * 0.5
+
+        # ──────────────────────────────
+        # Construcción base para simulaciones de tasa
+        # ──────────────────────────────
+        df_temp = df.copy()
+        df_temp['Asignación Óptima (%)'] = x * 100
+        df_temp['Valor Asignado (USD B)'] = df_temp['Asignación Óptima (%)'] / 100 * df_temp['Monto (USD B)']
+        df_temp['Tasa Simulada (%)'] = df_temp['Tasa (%)']
+        df_temp['Interés Estimado Base'] = df_temp['Valor Asignado (USD B)'] * df_temp['Tasa Simulada (%)'] / 100
+        df_temp.loc[df_temp['Tipo'] == 'Pasivo', 'Interés Estimado Base'] *= -1
+        impacto_base = df_temp['Interés Estimado Base'].sum()
+
+        # ──────────────────────────────
+        # Penalización por sensibilidad neta a tasas
+        # ──────────────────────────────
+        sensibilidad_score = 0
+        ganancia_total = 0
+        perdida_total = 0
+
+        for delta in [-0.02, -0.01, 0.01, 0.02]:
+            df_temp['Tasa Simulada (%)'] = df_temp['Tasa (%)'] + delta * 100
+            df_temp['Interés Estimado Sim'] = df_temp['Valor Asignado (USD B)'] * df_temp['Tasa Simulada (%)'] / 100
+            df_temp.loc[df_temp['Tipo'] == 'Pasivo', 'Interés Estimado Sim'] *= -1
+            impacto_delta = df_temp['Interés Estimado Sim'].sum()
+
+            if delta < 0:
+                perdida_total += max(0, impacto_base - impacto_delta)
+            else:
+                ganancia_total += max(0, impacto_delta - impacto_base)
+
+        sensibilidad_score = perdida_total - 1.25 * ganancia_total
+
+        # ──────────────────────────────
+        # Penalización fuerte si el EVE es negativo para cualquier shock
+        # ──────────────────────────────
+        penalidad_eve = 0
+        for delta in [-0.02, -0.01, 0.01, 0.02]:
+            tasa_chocada = df_temp['Tasa (%)'] + delta * 100
+            df_temp['VP'] = df_temp['Valor Asignado (USD B)'] / (1 + tasa_chocada / 100) ** df_temp['Duración (años)']
+            vp_act = df_temp[df_temp['Tipo'] == 'Activo']['VP'].sum()
+            vp_pas = df_temp[df_temp['Tipo'] == 'Pasivo']['VP'].sum()
+            eve = vp_act - vp_pas
+            if eve < 0:
+                penalidad_eve += abs(eve)
+
+        # ──────────────────────────────
+        # Penalización por impacto general (±bps simulados)
+        # ──────────────────────────────
+        df_temp['Tasa Simulada (%)'] = df['Tasa (%)'] + cambio_tasa_simulacion
+        df_temp['Interés Estimado (USD B)'] = df_temp['Valor Asignado (USD B)'] * df_temp['Tasa Simulada (%)'] / 100
+        df_temp.loc[df_temp['Tipo'] == 'Pasivo', 'Interés Estimado (USD B)'] *= -1
+        impacto_despues = df_temp['Interés Estimado (USD B)'].sum()
+
+        df_base = df.copy()
+        df_base['Tasa Simulada (%)'] = df_base['Tasa (%)'] + cambio_tasa_simulacion
+        df_base['Interés Estimado (USD B)'] = df_base['Monto (USD B)'] * df_base['Tasa Simulada (%)'] / 100
+        df_base.loc[df_base['Tipo'] == 'Pasivo', 'Interés Estimado (USD B)'] *= -1
+        impacto_antes = df_base['Interés Estimado (USD B)'].sum()
+
+        penalidad_impacto = max(0, impacto_antes - impacto_despues)
+
+        # ──────────────────────────────
+        # Penalización por VaR
+        # ──────────────────────────────
+        var_activos = np.std(activos['Tasa (%)'] / 100)
+        valor_total_activos = np.sum(activos_sel * activos['Monto (USD B)'])
+        var_penalty = var_activos * 1.65 * valor_total_activos
+
+        # ──────────────────────────────
+        # Objetivo Total
+        # ──────────────────────────────
+        return (
+            descalce_duracion
+            + peso_concentracion * penalty_concentracion
+            + peso_diversificacion * penalty_diversificacion
+            + penalty_riesgo
+            + 2.5 * sensibilidad_score
+            + 1.0 * penalidad_eve
+            + 1.0 * penalidad_impacto
+            + 1.5 * penalidad_activos_poco_defensivos
+            + 1.0 * penalidad_pasivos_largos_caros
+            + peso_var * var_penalty
+        )
+
+
+
+
 
     constraints = []
 
@@ -136,8 +253,15 @@ def run_optimization(
     constraints.append({'type': 'ineq', 'fun': constraint_duracion})
 
     def constraint_liquidez(x):
-        efectivo_idx = activos[activos['Categoría'] == 'Efectivo'].index[0]
-        return (x[efectivo_idx] * activos.loc[efectivo_idx, 'Monto (USD B)']) - monto_liquidez_objetivo
+        activos_sel = x[:len(activos)]
+        total_activos_opt = np.sum(activos_sel * activos['Monto (USD B)'])
+
+        indices_efectivo = activos[activos['Categoría'] == 'Efectivo'].index
+        monto_efectivo_opt = np.sum([x[i] * df.loc[i, 'Monto (USD B)'] for i in indices_efectivo])
+
+        return monto_efectivo_opt - (porcentaje_liquidez_objetivo / 100) * total_activos_opt
+
+
 
     constraints.append({'type': 'ineq', 'fun': constraint_liquidez})
 
@@ -152,6 +276,22 @@ def run_optimization(
         return (tolerancia_monto / 100 * total_original) - abs(np.sum(x * df['Monto (USD B)']) - total_original)
 
     constraints.append({'type': 'ineq', 'fun': constraint_monto})
+
+
+    if var_original is not None and porcentaje_var_tolerado is not None:
+        def constraint_var(x):
+            activos_sel = x[:len(activos)]
+            valor_total_activos = np.sum(activos_sel * activos['Monto (USD B)'])
+            var_despues = np.std(activos['Tasa (%)'] / 100) * 1.65 * valor_total_activos
+            var_min = var_original * (1 + porcentaje_var_tolerado / 100)
+            return var_min - var_despues
+
+        constraints.append({'type': 'ineq', 'fun': constraint_var})
+
+
+
+    constraints.append({'type': 'ineq', 'fun': constraint_var})
+
 
     if optimizar_hacia_arriba:
         def constraint_subir_total(x):
@@ -174,7 +314,22 @@ def run_optimization(
 
                 constraints.append({'type': 'ineq', 'fun': Categoria_max})
 
+
+    if tolerancias_Subtipos:
+        for i, Subtipo in enumerate(df['Subtipo']):
+            if Subtipo in tolerancias_Subtipos:
+                tol = tolerancias_Subtipos[Subtipo] / 100
+                monto_original = df.loc[i, 'Monto (USD B)']
+
+                def Subtipo_max(x, idx=i, tol=tol, monto_original=monto_original):
+                    return (tol * monto_original) - abs(x[idx] * monto_original - monto_original)
+
+                constraints.append({'type': 'ineq', 'fun': Subtipo_max})
+
+
+
     result = minimize(objective, x0, bounds=bounds, constraints=constraints)
+
 
     if result.success:
         x_opt = result.x
@@ -215,23 +370,54 @@ def run_optimization(
     else:
         return df, {"error": "Optimización no exitosa. Ajusta restricciones o tolerancias."}
 
-def simular_escenario(df, cambio_tasa):
-    df_simulado = df.copy()
+def simular_escenario(df_antes, df_despues, cambio_tasa):
+    df_sim_antes = df_antes.copy()
+    df_sim_despues = df_despues.copy()
 
-    if 'Monto (USD B)' in df_simulado.columns:
-        df_simulado['Tasa Simulada (%)'] = df_simulado['Tasa (%)'] + cambio_tasa
-        df_simulado['Interés Estimado (USD B)'] = (df_simulado['Monto (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100)
-    elif 'Valor Asignado (USD B)' in df_simulado.columns:
-        df_simulado['Tasa Simulada (%)'] = df_simulado['Tasa (%)'] + cambio_tasa
-        df_simulado['Interés Estimado (USD B)'] = (df_simulado['Valor Asignado (USD B)'] * df_simulado['Tasa Simulada (%)'] / 100)
+    # Simulación antes de la optimización
+    df_sim_antes['Tasa Simulada (%)'] = df_sim_antes['Tasa (%)'] + cambio_tasa
+    if 'Valor Asignado (USD B)' in df_sim_antes.columns:
+        df_sim_antes['Interés Estimado (USD B)'] = (
+            df_sim_antes['Valor Asignado (USD B)'] * df_sim_antes['Tasa Simulada (%)'] / 100
+        )
+    else:
+        df_sim_antes['Interés Estimado (USD B)'] = (
+            df_sim_antes['Monto (USD B)'] * df_sim_antes['Tasa Simulada (%)'] / 100
+        )
 
-    if 'Categoría' not in df_simulado.columns:
-        df_simulado['Categoría'] = df_simulado.index.astype(str)
+    # Simulación después de la optimización
+    df_sim_despues['Tasa Simulada (%)'] = df_sim_despues['Tasa (%)'] + cambio_tasa
+    if 'Valor Asignado (USD B)' in df_sim_despues.columns:
+        df_sim_despues['Interés Estimado (USD B)'] = (
+            df_sim_despues['Valor Asignado (USD B)'] * df_sim_despues['Tasa Simulada (%)'] / 100
+        )
+    else:
+        df_sim_despues['Interés Estimado (USD B)'] = (
+            df_sim_despues['Monto (USD B)'] * df_sim_despues['Tasa Simulada (%)'] / 100
+        )
 
-    if 'Tipo' in df_simulado.columns:
-        df_simulado.loc[df_simulado['Tipo'] == 'Pasivo', 'Interés Estimado (USD B)'] *= -1
+    for df_sim in [df_sim_antes, df_sim_despues]:
+        if 'Categoría' not in df_sim.columns:
+            df_sim['Categoría'] = df_sim.index.astype(str)
+        if 'Tipo' in df_sim.columns:
+            df_sim.loc[df_sim['Tipo'] == 'Pasivo', 'Interés Estimado (USD B)'] *= -1
 
-    return df_simulado
+    # Calcular impacto total como suma neta (Activos - Pasivos)
+    impacto_total_antes = df_sim_antes['Interés Estimado (USD B)'].sum()
+    impacto_total_despues = df_sim_despues['Interés Estimado (USD B)'].sum()
+
+    resumen_impacto = {
+        "Impacto Antes": impacto_total_antes,
+        "Impacto Después": impacto_total_despues
+    }
+
+    return df_sim_antes, df_sim_despues, resumen_impacto
+
+
+
+
+
+
 
 def check_feasibility(*args, **kwargs):
     _, resumen = run_optimization(*args, **kwargs)
@@ -241,5 +427,6 @@ PARAM_DESCRIPTION = {
     "tasa_objetivo": "Tasa promedio objetivo del portafolio de activos.",
     "liquidez_minima": "Porcentaje mínimo de liquidez deseado respecto al total de activos."
 }
+
 
 
