@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,9 +13,6 @@ from modules.optimizer import (
     PARAM_DESCRIPTION
 )
 
-
-from modules.optimizer import PARAM_DESCRIPTION
-
 st.set_page_config(page_title="Citi ALM Optimizer", layout="wide")
 st.title("Optimización y Simulación ALM - Citigroup - Por Oscar Zeledón - ADEN Business School")
 
@@ -25,22 +23,17 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file, encoding='latin1')
     st.success("Archivo cargado correctamente ✅")
 
-    opt_tab, sim_tab, sens_tab, convex_tab, eve_tab = st.tabs([
+    opt_tab, sim_tab, sens_tab, convex_tab, eve_tab, frontera_tab = st.tabs([
         "🔏 Optimización de Portafolio",
         "📈 Simulación de Tasas",
         "📊 Análisis de Sensibilidad",
         "🔁 Curva de Convexidad",
-        "💼 EVE (Valor Económico del Capital)"
+        "💼 EVE (Valor Económico del Capital)",
+        "📉 Fronteras Eficientes"
     ])
-
 
     def format_b(val):
         return f"{val:.3f}B"
-
-
-
-
-
 
     with opt_tab:
         st.header("Parámetros de Optimización")
@@ -49,7 +42,9 @@ if uploaded_file:
         pasivos = df[df['Tipo'] == 'Pasivo']
         dur_act_orig = np.sum(activos['Monto (USD B)'] * activos['Duración (años)']) / np.sum(activos['Monto (USD B)'])
         dur_pas_orig = np.sum(pasivos['Monto (USD B)'] * pasivos['Duración (años)']) / np.sum(pasivos['Monto (USD B)'])
+        #if var_original is None:        
         var_orig = np.std(activos['Tasa (%)'] / 100) * 1.65 * np.sum(activos['Monto (USD B)'])
+
         liquidez_actual = activos[activos['Categoría'] == 'Efectivo']['Monto (USD B)'].sum()
         total_activos = activos['Monto (USD B)'].sum()
         porcentaje_liquidez_actual = (liquidez_actual / total_activos) * 100 if total_activos != 0 else 0
@@ -76,6 +71,13 @@ if uploaded_file:
 
         porcentaje_liquidez_objetivo = st.number_input("Liquidez Objetivo (% del total activos)", 0.0, 100.0, 5.0)
 
+        st.markdown("### 📉 Restricción Dinámica del VaR")
+        porcentaje_var_tolerado = st.slider(
+            "Variación permitida en el VaR (%) respecto al VaR original",
+            min_value=-50.0, max_value=50.0, value=0.0, step=1.0,
+            help="Ej: -10 significa que el VaR después debe ser al menos 10% menor que el VaR antes"
+        )
+
         st.markdown("### ⚖️ Opciones de Penalización")
         penalizar_concentracion = st.checkbox("Penalizar concentración de categorías", value=True)
         penalizar_diversificacion = st.checkbox("Penalizar falta de diversificación", value=True)
@@ -91,8 +93,22 @@ if uploaded_file:
 
         with st.expander("Configurar Tolerancias Individuales por Categoría"):
             for cat in categorias:
-                tolerancia = st.number_input(f"Tolerancia para {cat} (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0)
+                tolerancia = st.number_input(f"Tolerancia para {cat} (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0)
                 tolerancias_categorias[cat] = tolerancia
+
+        st.markdown("### 🧩 Tolerancia de Variación por Subtipo (%)")
+        subtipo_por_categoria = df.groupby('Categoría')['Subtipo'].unique().to_dict()
+        tolerancias_subtipos = {}
+
+        with st.expander("Configurar Tolerancias Individuales por Subtipo"):
+            for cat, subtipos in subtipo_por_categoria.items():
+                st.markdown(f"**{cat}**")
+                for sub in subtipos:
+                    tolerancia_sub = st.number_input(f"↳ Tolerancia para {sub} (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0)
+                    tolerancias_subtipos[sub] = tolerancia_sub
+
+        # El resto del código continúa igual...
+
 
         factible = check_feasibility(
             df,
@@ -101,9 +117,15 @@ if uploaded_file:
             tolerancia_duracion,
             tolerancia_monto,
             tolerancias_categorias,
+            tolerancias_subtipos,
             optimizar_hacia_arriba,
-            optimizar_hacia_abajo
-        )
+            optimizar_hacia_abajo,
+            var_original=var_orig,
+            porcentaje_var_tolerado=porcentaje_var_tolerado,
+            cambio_tasa_simulacion=0.0
+)
+
+
 
         if not factible:
             st.warning("⚠️ La combinación de restricciones y tolerancias no permite una solución viable.")
@@ -127,13 +149,21 @@ if uploaded_file:
                     tolerancia_duracion,
                     tolerancia_monto,
                     tolerancias_categorias,
+                    tolerancias_subtipos,
                     optimizar_hacia_arriba,
                     optimizar_hacia_abajo,
                     penalizar_concentracion=penalizar_concentracion,
                     penalizar_diversificacion=penalizar_diversificacion,
                     considerar_riesgo=considerar_riesgo,
-                    peso_riesgo=0.5
+                    peso_riesgo=0.5,
+                    var_original=var_orig,
+                    porcentaje_var_tolerado=porcentaje_var_tolerado,
+                    cambio_tasa_simulacion=0.0
                 )
+
+                st.session_state['resultado'] = resultado  # ⬅️ AQUÍ VA ESTA LÍNEA
+                st.session_state['resumen'] = resumen
+
 
                 if "error" in resumen:
                     st.error("❌ Optimización no exitosa.")
@@ -166,87 +196,6 @@ if uploaded_file:
                     st.dataframe(resultado_agrupado)
 
 
-
-                    # ===========================
-                    # 📈 Curva de Convexidad - Antes y Después
-                    # ===========================
-
-                    with convex_tab:
-                        if resultado is not None:
-                            tasas_eval = np.linspace(-0.03, 0.03, 13)
-                            _, convexidad_antes = calcular_convexidad(df, tasas_eval)
-                            _, convexidad_despues = calcular_convexidad(resultado, tasas_eval)
-                            fig_convex = graficar_convexidad(tasas_eval, convexidad_antes, convexidad_despues)
-
-                    # Agregar etiquetas de tasas en puntos base (ej: -300 bps)
-                            ax = fig_convex.axes[0]
-                            for i, tasa in enumerate(tasas_eval):
-                                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_despues[i]),
-                                    textcoords="offset points", xytext=(0, 5), ha='center', fontsize=8, color='orange')
-                                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_antes[i]),
-                                    textcoords="offset points", xytext=(0, -10), ha='center', fontsize=8, color='blue')
-
-                            st.subheader("📉 Curva de Convexidad del Portafolio de Activos")
-                            st.pyplot(fig_convex)
-
-                            st.markdown("""
-                    #### 🔍 Interpretación de la Curva de Convexidad
-                    La curva de convexidad muestra cómo cambia el valor total del portafolio de activos ante distintos cambios en la tasa de interés.
-                    
-                    - El eje X representa el cambio en la tasa de interés (en puntos base).
-                    - El eje Y muestra el valor estimado del portafolio bajo ese cambio de tasa.
-                    - Una curva más **pronunciada** indica **mayor sensibilidad** a los cambios de tasa.
-                    - Si la curva **sube más rápido** hacia los extremos, hay mayor **convexidad positiva**, lo cual es deseable desde la perspectiva de gestión de riesgo.
-                    
-                    Comparar las curvas **antes y después de la optimización** permite visualizar si el nuevo portafolio es **más estable ante shocks de tasas**.
-
-Una curva optimizada por encima de la original indica que:
-
-Se logró una estructura de portafolio más robusta ante cambios de tasa.
-Se maximizó el valor económico del capital (EVE, Economic Value of Equity).
-Se mejoró la protección del banco frente a riesgos de tasa de interés, lo cual es un objetivo central del ALM.
-                    """)
-
-                        else:
-                            st.info("Ejecuta primero la optimización para ver la curva de convexidad.")
-
-
-
-                    # ===========================
-                    # 💰 EVE Antes vs Después
-                    # ===========================
-                    with eve_tab:
-                        if resultado is not None:
-                            tasa_base = tasa_promedio_actual / 100  # convertir a decimal
-                            shocks = [-0.02, -0.01, 0.0, 0.01, 0.02]  # ±100 y ±200 puntos base
-
-                            df_eve_antes = calcular_eve(df, tasa_base, shocks, columna_monto='Monto (USD B)')
-                            df_eve_despues = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
-
-                            st.subheader("📉 Valor Económico del Capital (EVE) - Antes vs Después")
-
-                            fig_eve, ax_eve = plt.subplots()
-                            ax_eve.plot(df_eve_antes['Shock (%)'], df_eve_antes['EVE (USD B)'], label='Antes', marker='o', linestyle='-')
-                            ax_eve.plot(df_eve_despues['Shock (%)'], df_eve_despues['EVE (USD B)'], label='Después', marker='o', linestyle='--')
-
-                            ax_eve.set_title("Análisis EVE ante Shocks de Tasa")
-                            ax_eve.set_xlabel("Shock de Tasa (%)")
-                            ax_eve.set_ylabel("EVE (USD B)")
-                            ax_eve.axhline(0, color='gray', linestyle='--')
-                            ax_eve.legend()
-                            ax_eve.grid(True)
-                            st.pyplot(fig_eve)
-
-                            st.markdown("""
-                    **Interpretación**:
-                    - EVE representa el impacto en el valor económico del capital ante cambios paralelos en la curva de tasas.
-                    - Una curva más alta y estable indica mayor resiliencia del portafolio ante variaciones de tasas de interés.
-                    - Comparar las líneas *Antes* y *Después* permite evaluar si la optimización mejoró la sensibilidad estructural del balance.
-                    """)
-
-
-                        else:
-                            st.info("Ejecuta primero la optimización para ver el análisis EVE.")
 
 
 
@@ -429,145 +378,324 @@ Se mejoró la protección del banco frente a riesgos de tasa de interés, lo cua
 
 
 
+#SIMULADOR CAMBIO TASA
 
-    # ===========================
-    # PESTAÑA: SIMULACIÓN DE TASAS
-    # ===========================
+
+
     with sim_tab:
         st.header("Simulación de Tasas de Interés")
 
         cambio_tasa = st.slider("Cambio en la tasa (%)", -3.0, 3.0, 0.5, step=0.1)
 
-        if 'resultado' in locals():
-            df_sim = simular_escenario(resultado, cambio_tasa)
+        if 'resultado' in st.session_state:
+            df_optimizado = st.session_state['resultado']
+            resumen_opt = st.session_state['resumen']
         else:
-            df_sim = simular_escenario(df, cambio_tasa)
+            df_optimizado = df.copy()
+            resumen_opt = {}
+
+        df_sim_antes, df_sim_despues, resumen_impacto = simular_escenario(df, df_optimizado, cambio_tasa)
 
         # Agrupar por Tipo, Categoría y Subtipo
-        df_sim_grouped = df_sim.groupby(['Tipo', 'Categoría', 'Subtipo'], as_index=False).agg({
+        df_sim_grouped_antes = df_sim_antes.groupby(['Tipo', 'Categoría', 'Subtipo'], as_index=False).agg({
             'Tasa (%)': 'mean',
             'Tasa Simulada (%)': 'mean',
             'Interés Estimado (USD B)': 'sum'
         })
 
-        st.subheader("Resultado de la Simulación")
-        st.dataframe(df_sim_grouped[['Tipo', 'Categoría', 'Subtipo', 'Tasa (%)', 'Tasa Simulada (%)', 'Interés Estimado (USD B)']])
-
-        # Calcular impacto total: activos - pasivos
-        impacto_activos = df_sim_grouped[df_sim_grouped['Tipo'] == 'Activo']['Interés Estimado (USD B)'].sum()
-        impacto_pasivos = df_sim_grouped[df_sim_grouped['Tipo'] == 'Pasivo']['Interés Estimado (USD B)'].sum()
-        impacto_total = impacto_activos - abs(impacto_pasivos)
-
-        # ========== Primer gráfico: Impacto por CATEGORÍA principal ==========
-        st.subheader("Impacto Estimado por Categoría Principal")
-        df_categoria = df_sim_grouped.groupby(['Categoría'], as_index=False).agg({'Interés Estimado (USD B)': 'sum'})
-
-        # Agregar el Total (activos - pasivos) al dataframe de categoría
-        total_row_cat = pd.DataFrame({
-            'Categoría': ['Impacto Total'],
-            'Interés Estimado (USD B)': [impacto_total]
+        df_sim_grouped_despues = df_sim_despues.groupby(['Tipo', 'Categoría', 'Subtipo'], as_index=False).agg({
+            'Tasa (%)': 'mean',
+            'Tasa Simulada (%)': 'mean',
+            'Interés Estimado (USD B)': 'sum'
         })
-        df_categoria = pd.concat([df_categoria, total_row_cat], ignore_index=True)
+
+        st.subheader("Resultado de la Simulación (Después de Optimizar)")
+        st.dataframe(df_sim_grouped_despues[['Tipo', 'Categoría', 'Subtipo', 'Tasa (%)', 'Tasa Simulada (%)', 'Interés Estimado (USD B)']])
+
+        # Calcular impactos netos reales
+        impacto_total_antes = resumen_impacto["Impacto Antes"]
+        impacto_total_despues = resumen_impacto["Impacto Después"]
+
+        # ========== Gráfico: Impacto por CATEGORÍA principal ==========
+        st.subheader("Impacto Estimado por Categoría Principal")
+
+        df_cat_antes = df_sim_antes.groupby('Categoría', as_index=False)['Interés Estimado (USD B)'].sum()
+        df_cat_despues = df_sim_despues.groupby('Categoría', as_index=False)['Interés Estimado (USD B)'].sum()
+
+        df_cat = pd.merge(df_cat_antes, df_cat_despues, on='Categoría', how='outer', suffixes=(' Antes', ' Después')).fillna(0)
+        df_cat = pd.concat([df_cat, pd.DataFrame([{
+            'Categoría': 'Impacto Total',
+            'Interés Estimado (USD B) Antes': impacto_total_antes,
+            'Interés Estimado (USD B) Después': impacto_total_despues
+        }])], ignore_index=True)
 
         fig_cat, ax_cat = plt.subplots(figsize=(12, 6))
-        bars_cat = ax_cat.bar(df_categoria['Categoría'], df_categoria['Interés Estimado (USD B)'])
-
-        for i, row in df_categoria.iterrows():
-            ax_cat.text(
-                bars_cat[i].get_x() + bars_cat[i].get_width() / 2,
-                row['Interés Estimado (USD B)'] + 0.01,
-                f"${row['Interés Estimado (USD B)']:.2f}B",
-                ha='center',
-                va='bottom',
-                fontsize=9
-            )
-
+        x = np.arange(len(df_cat['Categoría']))
+        width = 0.35
+        ax_cat.bar(x - width/2, df_cat['Interés Estimado (USD B) Antes'], width, label='Antes', color='gray')
+        ax_cat.bar(x + width/2, df_cat['Interés Estimado (USD B) Después'], width, label='Después', color='royalblue')
+        ax_cat.set_xticks(x)
+        ax_cat.set_xticklabels(df_cat['Categoría'], rotation=45, ha='right')
         ax_cat.set_ylabel("Interés Estimado (USD B)")
-        ax_cat.set_title("Impacto por Categoría Principal (Incluyendo Total)")
-        ax_cat.tick_params(axis='x', rotation=45)
+        ax_cat.set_title("Impacto por Categoría Principal")
+        ax_cat.legend()
         st.pyplot(fig_cat)
 
-        # ========== Segundo gráfico: Impacto por SUBTIPO ==========
+        # ========== Gráfico: Impacto por SUBTIPO ==========
         st.subheader("Impacto Estimado por Subtipo")
 
-        # Agregar el Total (activos - pasivos) al dataframe de subtipo
-        total_row_subtipo = pd.DataFrame({
-            'Tipo': ['Total'],
-            'Categoría': ['Total'],
-            'Subtipo': ['Impacto Total'],
-            'Tasa (%)': [np.nan],
-            'Tasa Simulada (%)': [np.nan],
-            'Interés Estimado (USD B)': [impacto_total]
-        })
-        df_sim_grouped_total = pd.concat([df_sim_grouped, total_row_subtipo], ignore_index=True)
+        df_sub_antes = df_sim_antes.groupby('Subtipo', as_index=False)['Interés Estimado (USD B)'].sum()
+        df_sub_despues = df_sim_despues.groupby('Subtipo', as_index=False)['Interés Estimado (USD B)'].sum()
 
-        fig_subtipo, ax_subtipo = plt.subplots(figsize=(14, 6))
-        bars_subtipo = ax_subtipo.bar(df_sim_grouped_total['Subtipo'], df_sim_grouped_total['Interés Estimado (USD B)'])
+        df_sub = pd.merge(df_sub_antes, df_sub_despues, on='Subtipo', how='outer', suffixes=(' Antes', ' Después')).fillna(0)
+        df_sub = pd.concat([df_sub, pd.DataFrame([{
+            'Subtipo': 'Impacto Total',
+            'Interés Estimado (USD B) Antes': impacto_total_antes,
+            'Interés Estimado (USD B) Después': impacto_total_despues
+        }])], ignore_index=True)
 
-        for i, row in df_sim_grouped_total.iterrows():
-            if not pd.isna(row['Interés Estimado (USD B)']):
-                ax_subtipo.text(
-                    bars_subtipo[i].get_x() + bars_subtipo[i].get_width() / 2,
-                    row['Interés Estimado (USD B)'] + 0.01,
-                    f"${row['Interés Estimado (USD B)']:.2f}B",
-                    ha='center',
-                    va='bottom',
-                    fontsize=8
-                )
+        fig_sub, ax_sub = plt.subplots(figsize=(14, 6))
+        x = np.arange(len(df_sub['Subtipo']))
+        width = 0.35
+        ax_sub.bar(x - width/2, df_sub['Interés Estimado (USD B) Antes'], width, label='Antes', color='gray')
+        ax_sub.bar(x + width/2, df_sub['Interés Estimado (USD B) Después'], width, label='Después', color='royalblue')
+        ax_sub.set_xticks(x)
+        ax_sub.set_xticklabels(df_sub['Subtipo'], rotation=45, ha='right')
+        ax_sub.set_ylabel("Interés Estimado (USD B)")
+        ax_sub.set_title("Impacto por Subtipo")
+        ax_sub.legend()
+        st.pyplot(fig_sub)
 
-        ax_subtipo.set_ylabel("Interés Estimado (USD B)")
-        ax_subtipo.set_title("Impacto por Subtipo (Incluyendo Total)")
-        ax_subtipo.tick_params(axis='x', rotation=45)
-        st.pyplot(fig_subtipo)
-
+        # ========== Métricas finales ==========
         st.subheader("Impacto Total en Interés Estimado")
-        st.metric(label="Impacto Neto Estimado (USD B)", value=f"{impacto_total:.2f}B")
 
+        col1, col2 = st.columns(2)
+        col1.metric("Impacto Neto Antes (USD B)", f"{impacto_total_antes:.2f}B")
+        col2.metric("Impacto Neto Después (USD B)", f"{impacto_total_despues:.2f}B")
+
+        # ========== Validación visual si cambio es 0 ==========
+        if cambio_tasa == 0.0 and resumen_opt:
+            esperado = resumen_opt.get('Ganancia Estimada Después (USD B)', None)
+            if esperado is not None:
+                diferencia = impacto_total_despues - esperado
+                st.markdown(f"✅ Validación: Cuando cambio = 0%, ganancia esperada ≈ **{esperado:.2f}B**")
+                st.markdown(f"📊 Diferencia vs Simulación: **{diferencia:+.4f}B**")
+
+                # Gráfico de comparación
+                fig_comp, ax_comp = plt.subplots()
+                valores = [esperado, impacto_total_despues]
+                etiquetas = ["Ganancia del Resumen", "Impacto Simulado"]
+                colores = ["orange", "blue"]
+                ax_comp.bar(etiquetas, valores, color=colores)
+                for i, val in enumerate(valores):
+                    ax_comp.text(i, val + 0.01 * max(valores), f"{val:.2f}B", ha='center')
+                ax_comp.set_title("Comparación de Ganancia Estimada vs Impacto Simulado (Cambio = 0%)")
+                st.pyplot(fig_comp)
 
 
     # ===========================
     # PESTAÑA: ANÁLISIS DE SENSIBILIDAD
     # ===========================
-    with sens_tab:
-        st.header("Análisis de Sensibilidad a Cambios en la Tasa")
+        with sens_tab:
+            st.header("Análisis de Sensibilidad a Cambios en la Tasa")
 
-        cambios = [-2.0, -1.0, 0.0, 1.0, 2.0]
-        resumenes = []
+            cambios = [-2.0, -1.0, 0.0, 1.0, 2.0]
+            resumenes = []
 
-        for delta in cambios:
-            df_escenario = simular_escenario(resultado if 'resultado' in locals() else df, delta)
+            if 'resultado' in st.session_state:
+                df_optimizado = st.session_state['resultado']
+            else:
+                df_optimizado = df.copy()
 
-            df_escenario_grouped = df_escenario.groupby(['Tipo'], as_index=False).agg({'Interés Estimado (USD B)': 'sum'})
+            for delta in cambios:
+                df_sim_antes, df_sim_despues, resumen_impacto = simular_escenario(df, df_optimizado, delta)
 
-            impacto_activos = df_escenario_grouped[df_escenario_grouped['Tipo'] == 'Activo']['Interés Estimado (USD B)'].sum()
-            impacto_pasivos = df_escenario_grouped[df_escenario_grouped['Tipo'] == 'Pasivo']['Interés Estimado (USD B)'].sum()
-            impacto_total = impacto_activos - abs(impacto_pasivos)
+                resumenes.append({
+                    "Cambio en Tasa (%)": delta,
+                    "Impacto Neto Antes (USD B)": round(resumen_impacto['Impacto Antes'], 3),
+                    "Impacto Neto Después (USD B)": round(resumen_impacto['Impacto Después'], 3),
+                })
 
-            resumenes.append({
-                "Cambio en Tasa (%)": delta,
-                "Impacto Neto Estimado (USD B)": round(impacto_total, 3)
-            })
+            df_resumen_sens = pd.DataFrame(resumenes)
 
-        df_resumen_sens = pd.DataFrame(resumenes)
+            st.subheader("Tabla de Resultados de Sensibilidad")
+            st.dataframe(df_resumen_sens)
 
-        st.subheader("Tabla de Resultados de Sensibilidad")
-        st.dataframe(df_resumen_sens)
+            # Graficar ambas curvas
+            fig3, ax3 = plt.subplots(figsize=(8, 4))
+            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Antes (USD B)"], marker='o', linestyle='-', label="Antes", color="gray")
+            ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Después (USD B)"], marker='o', linestyle='--', label="Después", color="royalblue")
+            ax3.axhline(0, color='black', linestyle='--')
+            ax3.set_title("Sensibilidad del Impacto Neto ante Cambios de Tasa")
+            ax3.set_xlabel("Cambio en la Tasa (%)")
+            ax3.set_ylabel("Impacto Neto Estimado (USD B)")
+            ax3.legend()
+            ax3.grid(True)
+            st.pyplot(fig3)
 
-        fig3, ax3 = plt.subplots(figsize=(8, 4))
-        ax3.plot(df_resumen_sens["Cambio en Tasa (%)"], df_resumen_sens["Impacto Neto Estimado (USD B)"], marker='o', linestyle='-')
-        ax3.axhline(0, color='gray', linestyle='--')
-        ax3.set_title("Sensibilidad del Impacto Neto ante Cambios de Tasa")
-        ax3.set_xlabel("Cambio en la Tasa (%)")
-        ax3.set_ylabel("Impacto Neto Estimado (USD B)")
-        ax3.grid(True)
-        st.pyplot(fig3)
+            st.subheader("Interpretación del Análisis de Sensibilidad")
+            st.markdown("""
+            - Un impacto positivo significa que **el banco se beneficia** ante el cambio de tasas.
+            - Un impacto negativo indica que **el banco pierde rentabilidad** ante el cambio de tasas.
+            - El gráfico compara el comportamiento del portafolio **antes y después de optimizar**.
+            """)
 
-        st.subheader("Interpretación del Análisis de Sensibilidad")
-        st.markdown("""
-        - Un impacto positivo significa que **el banco se beneficia** ante el cambio de tasas.
-        - Un impacto negativo indica que **el banco pierde rentabilidad** ante el cambio de tasas.
-        - El gráfico ayuda a visualizar si el portafolio es sensible positiva o negativamente ante cambios del mercado.
-        """)
+
+    # ===========================
+    # 📈 Curva de Convexidad - Antes y Después
+    # ===========================
+    with convex_tab:
+        if 'resultado' in st.session_state and st.session_state['resultado'] is not None:
+            resultado = st.session_state['resultado']
+            tasas_eval = np.linspace(-0.03, 0.03, 13)
+
+            # Calcula convexidad antes y después
+            _, convexidad_antes = calcular_convexidad(df, tasas_eval)
+            _, convexidad_despues = calcular_convexidad(resultado, tasas_eval)
+
+            fig_convex = graficar_convexidad(tasas_eval, convexidad_antes, convexidad_despues)
+
+            # Etiquetas en puntos base
+            ax = fig_convex.axes[0]
+            for i, tasa in enumerate(tasas_eval):
+                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_despues[i]),
+                            textcoords="offset points", xytext=(0, 5), ha='center', fontsize=8, color='orange')
+                ax.annotate(f"{int(tasa*10000)}bps", (tasas_eval[i], convexidad_antes[i]),
+                            textcoords="offset points", xytext=(0, -10), ha='center', fontsize=8, color='blue')
+
+            st.subheader("📉 Curva de Convexidad del Portafolio de Activos")
+            st.pyplot(fig_convex)
+
+            st.markdown("""
+                #### 🔍 Interpretación de la Curva de Convexidad
+                - El eje X representa el cambio en la tasa de interés (en puntos base).
+                - El eje Y muestra el valor estimado del portafolio bajo ese cambio de tasa.
+                - Una curva más **pronunciada** indica **mayor sensibilidad** a los cambios de tasa.
+                - Una curva optimizada por encima de la original indica que:
+                  - Se logró una estructura de portafolio más robusta ante cambios de tasa.
+                  - Se maximizó el valor económico del capital (EVE).
+                  - Se mejoró la protección frente al riesgo de tasa de interés.
+            """)
+
+        else:
+            st.info("Ejecuta primero la optimización para ver la curva de convexidad.")
+
+    # ===========================
+    # 💰 EVE Antes vs Después
+    # ===========================
+    with eve_tab:
+        if 'resultado' in st.session_state and st.session_state['resultado'] is not None:
+            resultado = st.session_state['resultado']
+            tasa_base = tasa_promedio_actual / 100
+            shocks = [-0.02, -0.01, 0.0, 0.01, 0.02]
+
+            df_eve_antes = calcular_eve(df, tasa_base, shocks, columna_monto='Monto (USD B)')
+            # Asegura que la columna exista (por si se salta la optimización)
+            if 'Valor Asignado (USD B)' not in resultado.columns:
+                resultado['Valor Asignado (USD B)'] = resultado['Monto (USD B)']
+
+            df_eve_despues = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
+
+
+            st.subheader("📉 Valor Económico del Capital (EVE) - Antes vs Después")
+
+            fig_eve, ax_eve = plt.subplots()
+            ax_eve.plot(df_eve_antes['Shock (%)'], df_eve_antes['EVE (USD B)'], label='Antes', marker='o', linestyle='-')
+            ax_eve.plot(df_eve_despues['Shock (%)'], df_eve_despues['EVE (USD B)'], label='Después', marker='o', linestyle='--')
+
+            ax_eve.set_title("Análisis EVE ante Shocks de Tasa")
+            ax_eve.set_xlabel("Shock de Tasa (%)")
+            ax_eve.set_ylabel("EVE (USD B)")
+            ax_eve.axhline(0, color='gray', linestyle='--')
+            ax_eve.legend()
+            ax_eve.grid(True)
+            st.pyplot(fig_eve)
+
+            st.markdown("""
+                **Interpretación**:
+                - EVE mide el impacto en el valor económico del capital ante shocks paralelos en tasas.
+                - Una línea más alta y estable sugiere mayor resiliencia del portafolio.
+                - La comparación *Antes* vs *Después* indica si la optimización mejoró la sensibilidad estructural.
+            """)
+
+
+        else:
+            st.info("Ejecuta primero la optimización para ver el análisis EVE.")
+
+    # FRONTERA TAB
+    with frontera_tab:
+        st.header("📉 Fronteras Eficientes: EVE vs Duración y Sensibilidad vs IBO")
+
+        if 'resultado' not in st.session_state:
+            st.info("Ejecuta la optimización primero para generar las fronteras eficientes.")
+        else:
+            resultado = st.session_state['resultado']
+            tasa_base = tasa_promedio_actual / 100
+            shocks = [-0.02, -0.01, 0.01, 0.02]
+
+            df_eve = calcular_eve(resultado, tasa_base, shocks, columna_monto='Valor Asignado (USD B)')
+            eve_promedio = df_eve['EVE (USD B)'].mean()
+
+            activos = resultado[resultado['Tipo'] == 'Activo']
+            duracion_activos = np.sum(activos['Valor Asignado (USD B)'] * activos['Duración (años)']) / np.sum(activos['Valor Asignado (USD B)'])
+
+            pasivos = resultado[resultado['Tipo'] == 'Pasivo']
+            dur_pasivos = np.sum(pasivos['Valor Asignado (USD B)'] * pasivos['Duración (años)']) / np.sum(pasivos['Valor Asignado (USD B)'])
+            ibo = 1 - abs(duracion_activos - dur_pasivos) / duracion_activos if duracion_activos != 0 else 0
+
+            impacto_base = np.sum(activos['Valor Asignado (USD B)'] * activos['Tasa (%)'] / 100)
+            sensibilidad_score = 0
+            ganancia_total = 0
+            perdida_total = 0
+            for delta in shocks:
+                tasa_sim = activos['Tasa (%)'] + delta * 100
+                interes = activos['Valor Asignado (USD B)'] * tasa_sim / 100
+                impacto = interes.sum()
+                if delta < 0:
+                    perdida_total += max(0, impacto_base - impacto)
+                else:
+                    ganancia_total += max(0, impacto - impacto_base)
+            sensibilidad_score = perdida_total - 1.25 * ganancia_total
+
+            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+            # 🔵 EXPLICACIÓN DEL GRÁFICO: EVE vs DURACIÓN PROMEDIO
+            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+            st.markdown("""
+            ### 🔷 Interpretación: EVE vs Duración Promedio
+            - **EVE (Economic Value of Equity)** representa la estabilidad del valor del portafolio ante shocks de tasas.
+            - **Duración promedio** mide la exposición del portafolio a tasas de interés: duraciones largas implican mayor riesgo de tasa.
+            - Idealmente se busca **maximizar el EVE** manteniendo una **duración razonable (ej. entre 2 y 4 años)**.
+            - Un buen punto se ubica en la parte **superior izquierda del gráfico** (alto EVE, duración moderada).
+            """)
+
+            fig1, ax1 = plt.subplots()
+            ax1.scatter(duracion_activos, eve_promedio, color='royalblue', s=100)
+            ax1.set_title("Frontera Eficiente: EVE vs Duración Promedio Activos")
+            ax1.set_xlabel("Duración Promedio Activos (años)")
+            ax1.set_ylabel("EVE Promedio (USD B)")
+            ax1.grid(True)
+            st.pyplot(fig1)
+
+            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+            # 🟠 EXPLICACIÓN DEL GRÁFICO: SENSIBILIDAD vs IBO
+            # ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+            st.markdown("""
+            ### 🟠 Interpretación: Sensibilidad a Tasas vs IBO
+            - **Sensibilidad** representa el efecto neto de cambios en tasas sobre los ingresos (penaliza más las pérdidas).
+            - **IBO (Índice de Balance Óptimo)** mide el alineamiento entre duración de activos y pasivos (ideal ≈ 1).
+            - Se busca una combinación donde el **IBO sea alto** (cercano a 1) y la **sensibilidad sea baja (negativa, pero controlada)**.
+            - El mejor punto está en la **esquina inferior derecha del gráfico**: bajo impacto negativo y alto balance.
+            """)
+
+            fig2, ax2 = plt.subplots()
+            ax2.scatter(ibo, sensibilidad_score, color='orange', s=100)
+            ax2.set_title("Frontera Eficiente: Sensibilidad a Tasas vs IBO")
+            ax2.set_xlabel("Índice de Balance Óptimo (IBO)")
+            ax2.set_ylabel("Sensibilidad (pérdidas - 1.25 * ganancias)")
+            ax2.grid(True)
+            st.pyplot(fig2)
+
+
 
 
 else:
